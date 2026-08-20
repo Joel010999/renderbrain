@@ -1,0 +1,45 @@
+[project]
+name = "renderbrain"
+version = "1.0.0"
+description = "RenderBrain - Content Intelligence Engine"
+authors = [
+    { name = "Joel", email = "joeljjs100@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.19.1",
+    "apify-client>=3.1.2",
+    "apscheduler>=3.11.3",
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "openai>=3.0.0",
+    "pydantic-settings[dotenv]>=2.15.0",
+    "redis>=5.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "uvicorn>=0.52.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.2,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "runtime"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "integration: tests that require running infrastructure (PostgreSQL or Redis — deselect with '-m not integration')",
+    "external: tests that call real external APIs and consume credits (opt-in only — requires --run-external flag)",
+]
+

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="flex flex-between">
+        <h2>Missions</h2>
+        <button class="btn btn-primary" onclick="document.getElementById('createModal').style.display='block'">+ New Mission</button>
+    </div>
+    <div style="margin-bottom: 1rem;">
+        <span class="badge badge-primary">Total: {{ total_missions }}</span>
+        <span class="badge badge-success">Enabled: {{ enabled_missions }}</span>
+    </div>
+
+    {% if missions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Source</th>
+                <th>Target</th>
+                <th>Interval (s)</th>
+                <th>Status</th>
+                <th>Updated At</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for m in missions %}
+            <tr>
+                <td><strong><a href="/dashboard/missions/{{ m.id }}">{{ m.name }}</a></strong></td>
+                <td>{{ m.source }}</td>
+                <td>{{ m.target }}</td>
+                <td>{{ m.interval_seconds }}</td>
+                <td>
+                    {% if m.enabled %}
+                    <span class="badge badge-success">Enabled</span>
+                    {% else %}
+                    <span class="badge badge-secondary">Disabled</span>
+                    {% endif %}
+                </td>
+                <td>{{ m.updated_at.strftime('%Y-%m-%d %H:%M:%S') if m.updated_at else m.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary" onclick="toggleMission('{{ m.id }}', {{ 'false' if m.enabled else 'true' }})">
+                        {{ 'Disable' if m.enabled else 'Enable' }}
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No missions found.</p>
+    {% endif %}
+</div>
+
+<!-- Modal Create Mission -->
+<div id="createModal" class="card" style="display:none; max-width: 500px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+    <h3>Create Mission</h3>
+    <div id="errorBox" class="error-msg"></div>
+    <form id="createForm">
+        <label>Name</label>
+        <input type="text" id="name" required>
+        
+        <label>Source</label>
+        <select id="source" required>
+            <option value="instagram">Instagram</option>
+        </select>
+        
+        <label>Target</label>
+        <input type="text" id="target" placeholder="Username or URL" required>
+        
+        <label>Interval (seconds)</label>
+        <input type="number" id="interval" value="3600" min="60" required>
+        
+        <div class="flex" style="margin-bottom: 1rem;">
+            <input type="checkbox" id="enabled" checked style="width:auto; margin:0;">
+            <label for="enabled" style="margin:0;">Enabled</label>
+        </div>
+        
+        <div class="flex">
+            <button type="submit" class="btn btn-primary">Create</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('createModal').style.display='none'">Cancel</button>
+        </div>
+    </form>
+</div>
+
+<script>
+async function toggleMission(id, enable) {
+    const action = enable ? 'enable' : 'disable';
+    const res = await fetch(`/api/v1/missions/${id}/${action}`, { method: 'POST' });
+    if (res.ok) {
+        window.location.reload();
+    } else {
+        alert('Error toggling mission');
+    }
+}
+
+document.getElementById('createForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const payload = {
+        name: document.getElementById('name').value,
+        source: document.getElementById('source').value,
+        target: document.getElementById('target').value,
+        interval_seconds: parseInt(document.getElementById('interval').value),
+        enabled: document.getElementById('enabled').checked
+    };
+    
+    const res = await fetch('/api/v1/missions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    
+    if (res.ok) {
+        window.location.reload();
+    } else {
+        const data = await res.json();
+        document.getElementById('errorBox').innerText = data.detail || 'Error creating mission';
+    }
+};
+</script>
+{% endblock %}

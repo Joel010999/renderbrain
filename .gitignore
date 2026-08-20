@@ -1,0 +1,84 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+MANIFEST
+
+# === Virtual environments ===
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# === uv ===
+.uv/
+
+# === Distribution / packaging ===
+.Python
+*.whl
+
+# === Unit test / coverage ===
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# === Type checkers ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+
+# === IDEs ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Environment variables ===
+.env
+.env.*
+!.env.example
+
+# === Logs ===
+*.log
+logs/
+
+# === Secrets ===
+*.pem
+*.key
+*.cert
+
+# === Database Backups ===
+*.dump
+renderbrain_backup*

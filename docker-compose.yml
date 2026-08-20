@@ -1,0 +1,103 @@
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — base de datos relacional principal
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: renderbrain-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - renderbrain_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 (alpine) — caché y cola de mensajes
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: renderbrain-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - renderbrain_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # RenderBrain API
+  # ---------------------------------------------------------------------------
+  renderbrain-api:
+    build: .
+    container_name: renderbrain-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "runtime.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # RenderBrain Scheduler
+  # ---------------------------------------------------------------------------
+  renderbrain-scheduler:
+    build: .
+    container_name: renderbrain-scheduler
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "runtime.scheduler"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # RenderBrain Worker
+  # ---------------------------------------------------------------------------
+  renderbrain-worker:
+    build: .
+    container_name: renderbrain-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "runtime.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  renderbrain_pgdata:
+    name: renderbrain_pgdata
+  renderbrain_redis_data:
+    name: renderbrain_redis_data

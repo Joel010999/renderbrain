@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="flex flex-between">
+        <h2>Mission: {{ mission.name }}</h2>
+        <div>
+            <button class="btn btn-secondary" onclick="document.getElementById('editModal').style.display='block'">Edit</button>
+            <button class="btn {{ 'btn-secondary' if mission.enabled else 'btn-primary' }}" onclick="toggleMission('{{ mission.id }}', {{ 'false' if mission.enabled else 'true' }})">
+                {{ 'Disable' if mission.enabled else 'Enable' }}
+            </button>
+        </div>
+    </div>
+    <div style="margin-top: 1rem;">
+        <span class="badge {{ 'badge-success' if mission.enabled else 'badge-secondary' }}">{{ 'Enabled' if mission.enabled else 'Disabled' }}</span>
+        <span class="badge badge-primary">{{ mission.source }}</span>
+        <strong>Target:</strong> {{ mission.target }} | 
+        <strong>Interval:</strong> {{ mission.interval_seconds }}s |
+        <strong>Updated:</strong> {{ mission.updated_at.strftime('%Y-%m-%d %H:%M:%S') if mission.updated_at else mission.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+    </div>
+</div>
+
+<div class="card">
+    <h3>Opportunities</h3>
+    {% if intelligence.opportunities %}
+        <ul>
+            {% for o in intelligence.opportunities %}
+            <li style="margin-bottom: 0.5rem;">
+                <strong>Opportunity:</strong> {{ o.content }} <br>
+                <small style="color: #666;">
+                    Confidence: {{ o.confidence }} | 
+                    Supporting Patterns: {{ o.supporting_pattern_ids | length }} |
+                    Date: {{ o.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </small>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p style="color: #888;">No opportunities detected yet.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Patterns</h3>
+    {% if intelligence.patterns %}
+        <ul>
+            {% for p in intelligence.patterns %}
+            <li style="margin-bottom: 0.5rem;">
+                <strong>Pattern:</strong> {{ p.content }} <br>
+                <small style="color: #666;">
+                    Confidence: {{ p.confidence }} | 
+                    Support Count: {{ p.support_count }} |
+                    Supporting Insights: {{ p.supporting_insight_ids | length }} |
+                    Date: {{ p.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </small>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p style="color: #888;">No patterns detected yet.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Insights</h3>
+    {% if intelligence.insights %}
+        <ul>
+            {% for i in intelligence.insights %}
+            <li style="margin-bottom: 0.5rem;">
+                {{ i.content }} <br>
+                <small style="color: #666;">
+                    Confidence: {{ i.confidence }} | 
+                    Date: {{ i.created_at.strftime('%Y-%m-%d %H:%M') }}
+                </small>
+            </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p style="color: #888;">No insights collected yet.</p>
+    {% endif %}
+</div>
+
+<!-- Modal Edit Mission -->
+<div id="editModal" class="card" style="display:none; max-width: 500px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+    <h3>Edit Mission</h3>
+    <div id="errorBox" class="error-msg"></div>
+    <form id="editForm">
+        <label>Name</label>
+        <input type="text" id="name" value="{{ mission.name }}" required>
+        
+        <label>Target</label>
+        <input type="text" id="target" value="{{ mission.target }}" required>
+        
+        <label>Interval (seconds)</label>
+        <input type="number" id="interval" value="{{ mission.interval_seconds }}" min="60" required>
+        
+        <div class="flex" style="margin-bottom: 1rem;">
+            <input type="checkbox" id="enabled" {% if mission.enabled %}checked{% endif %} style="width:auto; margin:0;">
+            <label for="enabled" style="margin:0;">Enabled</label>
+        </div>
+        
+        <div class="flex">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('editModal').style.display='none'">Cancel</button>
+        </div>
+    </form>
+</div>
+
+<script>
+async function toggleMission(id, enable) {
+    const action = enable ? 'enable' : 'disable';
+    const res = await fetch(`/api/v1/missions/${id}/${action}`, { method: 'POST' });
+    if (res.ok) {
+        window.location.reload();
+    } else {
+        alert('Error toggling mission');
+    }
+}
+
+document.getElementById('editForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const payload = {
+        name: document.getElementById('name').value,
+        target: document.getElementById('target').value,
+        interval_seconds: parseInt(document.getElementById('interval').value),
+        enabled: document.getElementById('enabled').checked
+    };
+    
+    const res = await fetch('/api/v1/missions/{{ mission.id }}', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    
+    if (res.ok) {
+        window.location.reload();
+    } else {
+        const data = await res.json();
+        document.getElementById('errorBox').innerText = data.detail || 'Error updating mission';
+    }
+};
+</script>
+{% endblock %}

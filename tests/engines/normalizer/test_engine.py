@@ -135,6 +135,76 @@ class TestNormalizerEngineInstagram:
         
         assert base_raw_payload == original
 
+    async def test_instagram_fallback_logic(self, mission_id):
+        # Base payload using the real example
+        base = {
+            "url_queried": "https://www.instagram.com/p/DbcFgQ0P5eE/",
+            "items_received": 1,
+            "data": {
+                "inputUrl": "https://www.instagram.com/p/DbcFgQ0P5eE/",
+                "id": "3953058780236715908",
+                "type": "Video",
+                "shortCode": "DbcFgQ0P5eE",
+                "url": "https://www.instagram.com/p/DbcFgQ0P5eE/",
+                "commentsCount": 0,
+                "firstComment": "",
+                "alt": "Video by Dimitris Tech",
+                "likesCount": 10,
+                "timestamp": "2026-07-31T01:30:02.000Z",
+                "ownerFullName": "Dimitris Tech | Software a medida",
+                "ownerUsername": "dimitris.tech",
+                "ownerId": "46291752290",
+                "productType": "clips",
+                "videoPlayCount": 873
+            }
+        }
+        
+        engine = NormalizerEngine()
+        
+        # A. caption presente -> prioriza caption
+        payload_a = base.copy()
+        payload_a["data"] = base["data"].copy()
+        payload_a["data"]["caption"] = "Real caption"
+        payload_a["data"]["text"] = "Real text"
+        sig_a = RawSignalDetected(sensor="instagram_apify_sensor", source="instagram", mission_id=mission_id, raw_payload=payload_a)
+        can_a = await engine.normalize(sig_a)
+        assert can_a.content == "Real caption"
+        
+        # B. caption ausente + text presente -> usa text
+        payload_b = base.copy()
+        payload_b["data"] = base["data"].copy()
+        payload_b["data"]["text"] = "Real text"
+        sig_b = RawSignalDetected(sensor="instagram_apify_sensor", source="instagram", mission_id=mission_id, raw_payload=payload_b)
+        can_b = await engine.normalize(sig_b)
+        assert can_b.content == "Real text"
+
+        # C. caption/text ausentes + alt presente -> usa alt
+        payload_c = base.copy()
+        payload_c["data"] = base["data"].copy()
+        sig_c = RawSignalDetected(sensor="instagram_apify_sensor", source="instagram", mission_id=mission_id, raw_payload=payload_c)
+        can_c = await engine.normalize(sig_c)
+        assert can_c.content == "Video by Dimitris Tech"
+        
+        # D. caption/text vacíos + alt presente -> usa alt
+        payload_d = base.copy()
+        payload_d["data"] = base["data"].copy()
+        payload_d["data"]["caption"] = "   "
+        payload_d["data"]["text"] = ""
+        sig_d = RawSignalDetected(sensor="instagram_apify_sensor", source="instagram", mission_id=mission_id, raw_payload=payload_d)
+        can_d = await engine.normalize(sig_d)
+        assert can_d.content == "Video by Dimitris Tech"
+        
+        # E. Verify fields (author, timestamp, metrics) with real payload
+        assert can_c.author == "dimitris.tech"
+        assert can_c.captured_at == datetime(2026, 7, 31, 1, 30, 2, tzinfo=UTC)
+        assert can_c.metrics == {
+            "likes": 10,
+            "comments": 0
+            # videoPlayCount is not extracted by current metric logic (only viewsCount or playsCount)
+            # but we won't change the metrics extraction to maintain historic exactness unless asked.
+            # wait, the logic uses playsCount. We keep it as is.
+        }
+
 class TestNormalizerEngineManual:
     async def test_manual_flow_preserved(self, mission_id):
         signal = RawSignalDetected(

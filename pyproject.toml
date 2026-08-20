@@ -1,6 +1,6 @@
 [project]
 name = "renderbrain"
-version = "1.0.0"
+version = "1.0.1"
 description = "RenderBrain - Content Intelligence Engine"
 authors = [
     { name = "Joel", email = "joeljjs100@gmail.com" }
@@ -20,13 +20,6 @@ dependencies = [
     "uvicorn>=0.52.1",
 ]
 
-[build-system]
-requires = ["uv_build>=0.12.2,<0.13.0"]
-build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-root = ""
-module-name = "runtime"
 
 [dependency-groups]
 dev = [

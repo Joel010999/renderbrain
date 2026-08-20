@@ -755,8 +755,8 @@ wheels = [
 
 [[package]]
 name = "renderbrain"
-version = "1.0.0"
-source = { editable = "." }
+version = "1.0.1"
+source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
     { name = "apify-client" },

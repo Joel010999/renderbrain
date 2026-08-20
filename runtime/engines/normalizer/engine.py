@@ -96,9 +96,14 @@ class NormalizerEngine(BaseNormalizer):
             raise ValueError("Invalid Instagram raw_payload: missing or invalid 'data' dictionary.")
 
         # content: extraído del caption o texto principal del post/reel.
-        content = data.get("caption") or ""
-        if not isinstance(content, str):
-            content = str(content)
+        # Fallback a 'alt' si 'caption' no existe o está vacío.
+        content = data.get("caption")
+        if not content or not str(content).strip():
+            content = data.get("text") # Added support for text just in case apify changed it
+        if not content or not str(content).strip():
+            content = data.get("alt")
+            
+        content = str(content).strip() if content else ""
 
         # author: username u ownerUsername equivalente
         author = data.get("ownerUsername") or data.get("username")

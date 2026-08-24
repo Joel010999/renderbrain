@@ -288,16 +288,41 @@ class SignalWorker:
 
                         # ----------------------------------------------------------
                         # Paso 6: Opportunity Detection
+                        #
+                        # Degradación controlada: InvalidOpportunitySupportError indica
+                        # que el JSON del LLM fue parseado pero los índices de soporte
+                        # son semánticamente inválidos (ej: índice fuera de rango).
+                        # En este caso descartamos únicamente la Opportunity y dejamos
+                        # continuar el pipeline — Insight, Pattern y ProcessedSignal
+                        # se persisten normalmente en el commit final.
+                        #
+                        # Errores de infraestructura (timeout, RuntimeError, DB) siguen
+                        # siendo fatales y se propagan al except Exception externo.
                         # ----------------------------------------------------------
-                        from runtime.engines.cognitive.opportunity_detector import OpportunityDetector
-                        opportunity_detector = OpportunityDetector(llm_provider=self._llm_provider)
-                        
-                        opportunity, opp_supporting_ids = await opportunity_detector.detect(
-                            mission_id=canonical.mission_id,
-                            mission_context=self._mission_context,
-                            intelligence_view=intelligence_view,
+                        from runtime.engines.cognitive.opportunity_detector import (
+                            OpportunityDetector,
+                            InvalidOpportunitySupportError,
                         )
-                        
+                        opportunity_detector = OpportunityDetector(llm_provider=self._llm_provider)
+
+                        try:
+                            opportunity, opp_supporting_ids = await opportunity_detector.detect(
+                                mission_id=canonical.mission_id,
+                                mission_context=self._mission_context,
+                                intelligence_view=intelligence_view,
+                            )
+                        except InvalidOpportunitySupportError as opp_err:
+                            logger.warning(
+                                "Invalid opportunity support indexes — discarding opportunity, preserving valid intelligence",
+                                extra={
+                                    "error": str(opp_err),
+                                    "fingerprint": fingerprint,
+                                    "canonical_signal_id": str(canonical.id),
+                                },
+                            )
+                            opportunity = None
+                            opp_supporting_ids = []
+
                         if opportunity:
                             await repo.add_opportunity(opportunity, opp_supporting_ids)
                             logger.info(

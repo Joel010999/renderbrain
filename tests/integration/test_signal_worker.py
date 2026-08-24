@@ -749,3 +749,331 @@ async def test_signal_worker_crash_and_redelivery():
         await _cleanup_processed_signal(async_session, mission_id)
         await redis.delete(_TEST_STREAM)
         await redis.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Hotfix v1.0.2 — Regression Tests: Resilient Opportunity Support Mapping
+# ---------------------------------------------------------------------------
+
+
+class _MultiStepFakeLLM:
+    """
+    LLM fake que responde diferente segun el prompt recibido.
+    Permite simular el comportamiento completo del pipeline cognitivo:
+      - CognitiveEngine  -> relevant=True
+      - PatternDetector  -> pattern_found=False (sin umbral, sin pattern nuevo)
+      - OpportunityDetector -> configurable por el caller
+    """
+
+    def __init__(self, opportunity_response=None, infra_error=None):
+        self.opportunity_response = opportunity_response
+        self.infra_error = infra_error
+        self.call_count = 0
+
+    async def complete(self, prompt):
+        self.call_count += 1
+
+        # CognitiveEngine prompt
+        if "evidence" in prompt and "insight" in prompt and "relevant" in prompt:
+            return json.dumps({
+                "relevant": True,
+                "evidence": "Evidence for hotfix regression test",
+                "insight": "Insight for hotfix regression test",
+                "confidence": 0.85,
+                "reason": "Hotfix v1.0.2 regression test",
+            })
+
+        # PatternDetector prompt
+        if "pattern_found" in prompt or "Un patron es una recurrencia" in prompt:
+            return json.dumps({
+                "pattern_found": False,
+                "reason": "Not enough insights for hotfix regression test",
+            })
+
+        # OpportunityDetector prompt
+        if "opportunity_found" in prompt or "Oportunidad" in prompt:
+            if self.infra_error is not None:
+                raise self.infra_error
+            if self.opportunity_response is not None:
+                return self.opportunity_response
+            return json.dumps({
+                "opportunity_found": False,
+                "reason": "No opportunity found in hotfix regression test",
+            })
+
+        # Default fallback
+        return json.dumps({"relevant": False, "reason": "Unknown prompt"})
+
+
+@pytest.mark.integration
+async def test_invalid_opportunity_support_preserves_intelligence():
+    """
+    HOTFIX v1.0.2 -- Test de Regresion Exacto.
+
+    Reproduce el bug de produccion:
+    - 1 Pattern pre-cargado en la vista de la mision.
+    - LLM fake retorna supporting_pattern_indexes: [2] (invalido: fuera de rango).
+
+    Resultado esperado:
+    - InvalidOpportunitySupportError es capturada internamente por el worker.
+    - La Opportunity NO se persiste.
+    - Insight y ProcessedSignal SI se persisten (commit exitoso).
+    - Ocurre XACK -> el mensaje NO queda pending.
+    """
+    from runtime.infrastructure.database.models.knowledge import (
+        InsightModel,
+        OpportunityModel,
+    )
+
+    redis = get_redis_client()
+    await redis.delete(_TEST_STREAM)
+
+    mission_id = uuid4()
+    canonical_id = None
+
+    try:
+        await _create_mission_for_test(async_session, mission_id)
+
+        async with async_session() as session:
+            from runtime.infrastructure.database.models.knowledge import PatternModel
+            from datetime import datetime, UTC as _UTC
+            session.add(PatternModel(
+                id=uuid4(),
+                mission_id=mission_id,
+                content="Pre-loaded pattern for hotfix regression",
+                confidence=0.9,
+                support_count=2,
+                created_at=datetime.now(_UTC),
+            ))
+            await session.commit()
+
+        await _publish_test_signal(
+            redis, _TEST_STREAM, mission_id,
+            fingerprint_id="hotfix-v102-invalid-support",
+        )
+
+        cg = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_TEST_CONSUMER,
+        )
+        await cg.ensure_group()
+
+        invalid_opp_response = json.dumps({
+            "opportunity_found": True,
+            "content": "Opportunity with invalid index",
+            "confidence": 0.8,
+            "supporting_pattern_indexes": [2],
+            "reason": "Regression test for hotfix v1.0.2",
+        })
+        llm = _MultiStepFakeLLM(opportunity_response=invalid_opp_response)
+        engine = CognitiveEngine(llm)
+
+        messages = await cg.read_new(count=1)
+        assert len(messages) == 1
+        entry_id, envelope = messages[0]
+
+        worker = SignalWorker(
+            consumer_group=cg,
+            session_factory=async_session,
+            cognitive_engine=engine,
+            llm_provider=llm,
+            mission_context=_MISSION_CONTEXT,
+        )
+
+        canonical, transaction = await worker.process_one(entry_id, envelope)
+        assert canonical is not None
+        canonical_id = canonical.id
+
+        async with async_session() as session:
+            sig_repo = CanonicalSignalRepository(session)
+            recovered = await sig_repo.get_by_id(canonical_id)
+            assert recovered is not None, "CanonicalSignal DEBE estar persistida"
+
+            ps_result = await session.execute(
+                select(ProcessedSignalModel).where(ProcessedSignalModel.mission_id == mission_id)
+            )
+            assert len(ps_result.scalars().all()) == 1, "ProcessedSignal DEBE estar persistida"
+
+            insight_result = await session.execute(
+                select(InsightModel).where(InsightModel.mission_id == mission_id)
+            )
+            assert len(insight_result.scalars().all()) == 1, "Insight DEBE estar persistido"
+
+            opp_result = await session.execute(
+                select(OpportunityModel).where(OpportunityModel.mission_id == mission_id)
+            )
+            assert len(opp_result.scalars().all()) == 0, "Opportunity NO debe persistirse con indice invalido"
+
+        pending_info = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        assert entry_id not in [p["message_id"] for p in pending_info], "Mensaje DEBE haber sido XACK'd"
+
+    finally:
+        if canonical_id is not None:
+            await _cleanup_canonical(async_session, canonical_id)
+        await _cleanup_processed_signal(async_session, mission_id)
+        await redis.delete(_TEST_STREAM)
+        await redis.aclose()
+
+
+@pytest.mark.integration
+async def test_valid_opportunity_support_persists():
+    """
+    HOTFIX v1.0.2 -- Test de Indice Correcto.
+    1 Pattern pre-cargado. LLM fake retorna supporting_pattern_indexes: [0].
+    Resultado: Opportunity persiste correctamente.
+    """
+    from runtime.infrastructure.database.models.knowledge import OpportunityModel
+
+    redis = get_redis_client()
+    await redis.delete(_TEST_STREAM)
+
+    mission_id = uuid4()
+    canonical_id = None
+
+    try:
+        await _create_mission_for_test(async_session, mission_id)
+
+        async with async_session() as session:
+            from runtime.infrastructure.database.models.knowledge import PatternModel
+            from datetime import datetime, UTC as _UTC
+            session.add(PatternModel(
+                id=uuid4(),
+                mission_id=mission_id,
+                content="Pre-loaded pattern for valid opportunity test",
+                confidence=0.9,
+                support_count=2,
+                created_at=datetime.now(_UTC),
+            ))
+            await session.commit()
+
+        await _publish_test_signal(
+            redis, _TEST_STREAM, mission_id,
+            fingerprint_id="hotfix-v102-valid-support",
+        )
+
+        cg = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_TEST_CONSUMER,
+        )
+        await cg.ensure_group()
+
+        valid_opp_response = json.dumps({
+            "opportunity_found": True,
+            "content": "Valid opportunity supported by pattern [0]",
+            "confidence": 0.87,
+            "supporting_pattern_indexes": [0],
+            "reason": "Valid index test for hotfix v1.0.2",
+        })
+        llm = _MultiStepFakeLLM(opportunity_response=valid_opp_response)
+        engine = CognitiveEngine(llm)
+
+        messages = await cg.read_new(count=1)
+        assert len(messages) == 1
+        entry_id, envelope = messages[0]
+
+        worker = SignalWorker(
+            consumer_group=cg,
+            session_factory=async_session,
+            cognitive_engine=engine,
+            llm_provider=llm,
+            mission_context=_MISSION_CONTEXT,
+        )
+        canonical, transaction = await worker.process_one(entry_id, envelope)
+        canonical_id = canonical.id
+
+        async with async_session() as session:
+            opp_result = await session.execute(
+                select(OpportunityModel).where(OpportunityModel.mission_id == mission_id)
+            )
+            opps = opp_result.scalars().all()
+            assert len(opps) == 1, f"Opportunity DEBE persistirse con indice valido [0]. Encontradas: {len(opps)}"
+            assert opps[0].content == "Valid opportunity supported by pattern [0]"
+
+        pending_info = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        assert entry_id not in [p["message_id"] for p in pending_info]
+
+    finally:
+        if canonical_id is not None:
+            await _cleanup_canonical(async_session, canonical_id)
+        await _cleanup_processed_signal(async_session, mission_id)
+        await redis.delete(_TEST_STREAM)
+        await redis.aclose()
+
+
+@pytest.mark.integration
+async def test_infra_error_in_opportunity_causes_rollback_no_xack():
+    """
+    HOTFIX v1.0.2 -- Test de Error de Infraestructura.
+    OpportunityDetector lanza RuntimeError (timeout real del provider).
+    Resultado: Rollback completo, NO XACK, mensaje pending.
+    """
+    redis = get_redis_client()
+    await redis.delete(_TEST_STREAM)
+
+    mission_id = uuid4()
+
+    try:
+        await _create_mission_for_test(async_session, mission_id)
+
+        async with async_session() as session:
+            from runtime.infrastructure.database.models.knowledge import PatternModel
+            from datetime import datetime, UTC as _UTC
+            session.add(PatternModel(
+                id=uuid4(),
+                mission_id=mission_id,
+                content="Pre-loaded pattern for infra error test",
+                confidence=0.9,
+                support_count=2,
+                created_at=datetime.now(_UTC),
+            ))
+            await session.commit()
+
+        await _publish_test_signal(
+            redis, _TEST_STREAM, mission_id,
+            fingerprint_id="hotfix-v102-infra-error",
+        )
+
+        cg = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_TEST_CONSUMER,
+        )
+        await cg.ensure_group()
+
+        infra_error = RuntimeError("Simulated provider timeout in OpportunityDetector")
+        llm = _MultiStepFakeLLM(infra_error=infra_error)
+        engine = CognitiveEngine(llm)
+
+        messages = await cg.read_new(count=1)
+        assert len(messages) == 1
+        entry_id, envelope = messages[0]
+
+        worker = SignalWorker(
+            consumer_group=cg,
+            session_factory=async_session,
+            cognitive_engine=engine,
+            llm_provider=llm,
+            mission_context=_MISSION_CONTEXT,
+        )
+
+        with pytest.raises(RuntimeError, match="Simulated provider timeout"):
+            await worker.process_one(entry_id, envelope)
+
+        async with async_session() as session:
+            cs_result = await session.execute(
+                select(CanonicalSignalModel).where(CanonicalSignalModel.source_event_id == envelope.event_id)
+            )
+            assert cs_result.scalar_one_or_none() is None, "CanonicalSignal NO debe estar en BD tras rollback"
+
+        pending_info = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        assert entry_id in [p["message_id"] for p in pending_info], "Mensaje DEBE seguir pending -- NO XACK"
+
+    finally:
+        await _cleanup_processed_signal(async_session, mission_id)
+        await redis.delete(_TEST_STREAM)
+        await redis.aclose()

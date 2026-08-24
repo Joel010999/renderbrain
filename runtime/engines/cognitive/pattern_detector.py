@@ -109,7 +109,7 @@ Tu objetivo es identificar patrones o recurrencias significativas basándote est
 Contexto de la Misión:
 {mission_context}
 
-Insights Recientes:
+Insights Recientes (índices zero-based):
 {insights_text}
 
 {existing_patterns_text}
@@ -118,7 +118,8 @@ Reglas Críticas:
 1. Un patrón es una recurrencia, un comportamiento repetido, o una tendencia observable. No es un simple resumen.
 2. Si no identificas ningún patrón nuevo y valioso, debes retornar "pattern_found": false.
 3. Si identificas un patrón, debes respaldarlo con al menos 2 índices de los Insights Recientes proveídos.
-4. Responde estrictamente con un JSON válido usando esta estructura:
+4. supporting_insight_indexes MUST use exactly the zero-based indexes shown above (e.g., 0, 1, 2...). Do NOT use 1-based numbering.
+5. Responde estrictamente con un JSON válido usando esta estructura:
 {{
     "pattern_found": true/false,
     "content": "Descripción detallada del patrón encontrado (si aplica)",

@@ -1,16 +1,23 @@
 """
-ApifyInstagramAdapter — S2.1
+ApifyInstagramAdapter — A1.1
 =============================
 Único punto de contacto entre RenderBrain y el SDK de Apify.
 Ningún otro módulo del proyecto debe importar ``apify-client`` directamente.
 
 Responsabilidades:
-- Validar token, URL y límite *antes* de tocar la red.
-- Trasladar ``limit`` al parámetro ``resultsLimit`` del Actor para que Apify
-  deje de procesar en cuanto alcance el máximo solicitado (control de costos).
-- Normalizar errores externos en excepciones propias de infraestructura.
+- Validar token, URL/username y límite *antes* de tocar la red.
+- fetch_post: obtiene datos de una publicación pública (target_type=post).
+- fetch_profile_posts: obtiene posts o reels de un perfil (target_type=profile).
+- fetch_profile_stories: obtiene stories activas de un perfil usando el actor
+  dedicado apify/instagram-stories-scraper.
 
-Lo que NO hace (restricciones S2.1):
+A1.1 — Cambios respecto a S2.1:
+- _LIMIT_MAX ampliado de 10 a 50 para soportar límites de perfil.
+- Nuevos métodos: fetch_profile_posts(), fetch_profile_stories().
+- Nueva excepción: ApifyStoriesUnavailableError (fallo soft de stories, no fatal).
+- _run_actor_for_profile() para profile scraping via directUrls con username.
+
+Lo que NO hace:
 - No crea InstagramSensor ni eventos de dominio.
 - No implementa retries, circuit breakers ni DLQ.
 - No publica en Redis ni escribe en base de datos.
@@ -19,7 +26,7 @@ Lo que NO hace (restricciones S2.1):
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 # apify-client se importa *aquí* y en ningún otro módulo del proyecto.
@@ -33,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Constantes de control de costos
 # ---------------------------------------------------------------------------
 _LIMIT_MIN: int = 1
-_LIMIT_MAX: int = 10  # tope duro; S2.x podrá ampliarlo de forma controlada
+_LIMIT_MAX: int = 50  # ampliado para soporte de perfiles (A1.1)
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +60,7 @@ class ApifyInvalidURLError(ApifyAdapterError):
 
 
 class ApifyInvalidLimitError(ApifyAdapterError):
-    """El parámetro ``limit`` está fuera del rango permitido [1, 10]."""
+    """El parámetro ``limit`` está fuera del rango permitido [1, 50]."""
 
 
 class ApifyActorRunError(ApifyAdapterError):
@@ -68,6 +75,16 @@ class ApifyUnexpectedResponseError(ApifyAdapterError):
     """La respuesta de Apify tiene un formato inesperado."""
 
 
+class ApifyStoriesUnavailableError(ApifyAdapterError):
+    """
+    El actor de Stories falló o no está disponible.
+
+    Este error es SOFT: el caller (InstagramProfileSensor) debe capturarlo,
+    loguearlo como warning y continuar con Posts/Reels. No debe propagarse
+    como error fatal al Scheduler.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Adaptador
 # ---------------------------------------------------------------------------
@@ -75,27 +92,31 @@ class ApifyUnexpectedResponseError(ApifyAdapterError):
 class ApifyInstagramAdapter:
     """Adaptador de infraestructura para el Actor de Instagram en Apify.
 
-    Usage::
-
-        adapter = ApifyInstagramAdapter()
-        result = adapter.fetch_post("https://www.instagram.com/p/XXXX/", limit=1)
+    Soporta dos modos de operación:
+    1. fetch_post(): URL directa de post/reel (target_type=post, legado S2.1).
+    2. fetch_profile_posts(): username de perfil + resultsType (target_type=profile, A1.1).
+    3. fetch_profile_stories(): username de perfil via actor dedicado (A1.1).
 
     Args:
-        actor_id: ID del Actor de Apify. Si se omite, se toma de
-            ``settings.APIFY_INSTAGRAM_ACTOR_ID``.
+        actor_id:        ID del Actor principal. Default: settings.APIFY_INSTAGRAM_ACTOR_ID.
+        stories_actor_id: ID del Actor de stories. Default: settings.APIFY_INSTAGRAM_STORIES_ACTOR_ID.
 
     Raises:
         ApifyTokenMissingError: si ``APIFY_API_TOKEN`` no está en el entorno.
     """
 
-    def __init__(self, actor_id: str | None = None) -> None:
+    def __init__(
+        self,
+        actor_id: str | None = None,
+        stories_actor_id: str | None = None,
+    ) -> None:
         self._actor_id: str = actor_id or settings.APIFY_INSTAGRAM_ACTOR_ID
-        # La validación del token se hace en fetch_post para no fallar en
-        # tiempo de construcción durante tests unitarios que mockean el cliente.
-        self._actor_id = actor_id or settings.APIFY_INSTAGRAM_ACTOR_ID
+        self._stories_actor_id: str = (
+            stories_actor_id or settings.APIFY_INSTAGRAM_STORIES_ACTOR_ID
+        )
 
     # ------------------------------------------------------------------
-    # Interfaz pública
+    # Interfaz pública — post individual (legado, target_type=post)
     # ------------------------------------------------------------------
 
     def fetch_post(self, url: str, limit: int = 1) -> list[dict[str, Any]]:
@@ -104,9 +125,7 @@ class ApifyInstagramAdapter:
         Args:
             url:   URL pública de la publicación (debe comenzar con
                    ``https://www.instagram.com/``).
-            limit: Cantidad máxima de ítems a solicitar. Rango válido: [1, 10].
-                   Se traslada directamente a ``resultsLimit`` del Actor para
-                   que Apify no procese más ítems de los necesarios.
+            limit: Cantidad máxima de ítems a solicitar. Rango válido: [1, 50].
 
         Returns:
             Lista de dicts; normalmente contiene un único elemento con los
@@ -115,21 +134,134 @@ class ApifyInstagramAdapter:
         Raises:
             ApifyTokenMissingError:       token ausente en el entorno.
             ApifyInvalidURLError:         URL vacía o con esquema inválido.
-            ApifyInvalidLimitError:       limit fuera de [1, 10].
+            ApifyInvalidLimitError:       limit fuera de [1, 50].
             ApifyActorRunError:           Actor no finalizó con SUCCEEDED.
             ApifyEmptyDatasetError:       dataset vacío.
             ApifyUnexpectedResponseError: respuesta en formato inesperado.
         """
-        # 1. Validaciones previas (no tocan la red)
         token = self._resolve_token()
         self._validate_url(url)
         self._validate_limit(limit)
 
-        # 2. Ejecutar el Actor
         logger.info("Apify: iniciando Actor '%s' con limit=%d", self._actor_id, limit)
-        items = self._run_actor(token=token, url=url, limit=limit)
+        items = self._run_actor(
+            token=token,
+            actor_id=self._actor_id,
+            run_input={
+                "directUrls": [url],
+                "resultsLimit": limit,
+                "resultsType": "posts",
+            },
+        )
         logger.info("Apify: Actor finalizó, %d ítem(s) recibido(s)", len(items))
         return items
+
+    # ------------------------------------------------------------------
+    # Interfaz pública — perfil (A1.1, target_type=profile)
+    # ------------------------------------------------------------------
+
+    def fetch_profile_posts(
+        self,
+        username: str,
+        limit: int = 10,
+        results_type: Literal["posts", "reels"] = "posts",
+    ) -> list[dict[str, Any]]:
+        """Obtiene posts o reels recientes de un perfil público de Instagram.
+
+        Args:
+            username:     Username limpio de Instagram (sin @, sin URL).
+            limit:        Máximo de ítems. Rango: [1, 50].
+            results_type: "posts" o "reels".
+
+        Returns:
+            Lista de dicts con los ítems del dataset de Apify.
+
+        Raises:
+            ApifyTokenMissingError, ApifyInvalidLimitError, ApifyActorRunError,
+            ApifyEmptyDatasetError, ApifyUnexpectedResponseError.
+        """
+        token = self._resolve_token()
+        self._validate_limit(limit)
+
+        profile_url = f"https://www.instagram.com/{username}/"
+        logger.info(
+            "Apify: iniciando Actor '%s' — profile=%s resultsType=%s limit=%d",
+            self._actor_id,
+            username,
+            results_type,
+            limit,
+        )
+        items = self._run_actor(
+            token=token,
+            actor_id=self._actor_id,
+            run_input={
+                "directUrls": [profile_url],
+                "resultsLimit": limit,
+                "resultsType": results_type,
+            },
+        )
+        logger.info(
+            "Apify: Actor finalizó — profile=%s resultsType=%s items=%d",
+            username,
+            results_type,
+            len(items),
+        )
+        return items
+
+    def fetch_profile_stories(
+        self,
+        username: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Obtiene stories activas de un perfil de Instagram via actor dedicado.
+
+        Usa ``APIFY_INSTAGRAM_STORIES_ACTOR_ID`` (apify/instagram-stories-scraper),
+        que requiere autenticación vía sessionid cookie configurado en Apify.
+
+        Args:
+            username: Username limpio de Instagram.
+            limit:    Máximo de stories. Rango: [1, 50].
+
+        Returns:
+            Lista de dicts con las stories disponibles.
+
+        Raises:
+            ApifyStoriesUnavailableError: fallo SOFT — el caller debe capturar,
+                loguear y continuar con Posts/Reels. No es error fatal.
+        """
+        try:
+            token = self._resolve_token()
+            self._validate_limit(limit)
+        except ApifyAdapterError as exc:
+            raise ApifyStoriesUnavailableError(
+                f"Stories no disponibles para '{username}': {exc}"
+            ) from exc
+
+        try:
+            logger.info(
+                "Apify: iniciando Actor de stories '%s' — profile=%s limit=%d",
+                self._stories_actor_id,
+                username,
+                limit,
+            )
+            items = self._run_actor(
+                token=token,
+                actor_id=self._stories_actor_id,
+                run_input={
+                    "usernames": [username],
+                    "resultsLimit": limit,
+                },
+            )
+            logger.info(
+                "Apify: Actor de stories finalizó — profile=%s stories=%d",
+                username,
+                len(items),
+            )
+            return items
+        except (ApifyActorRunError, ApifyEmptyDatasetError, ApifyUnexpectedResponseError) as exc:
+            raise ApifyStoriesUnavailableError(
+                f"Stories no disponibles para '{username}': {type(exc).__name__} — {exc}"
+            ) from exc
 
     # ------------------------------------------------------------------
     # Helpers privados
@@ -174,33 +306,20 @@ class ApifyInstagramAdapter:
         self,
         *,
         token: str,
-        url: str,
-        limit: int,
+        actor_id: str,
+        run_input: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Llama al Actor de Apify y devuelve la lista de ítems del dataset."""
+        """Llama a un Actor de Apify y devuelve la lista de ítems del dataset."""
         client = ApifyClient(token)  # token nunca se loguea
 
-        run_input = {
-            "directUrls": [url],
-            # resultsLimit es el parámetro del actor apify/instagram-scraper
-            # que controla cuántos ítems procesa Apify antes de detenerse.
-            "resultsLimit": limit,
-            "resultsType": "posts",
-        }
-
         try:
-            run = client.actor(self._actor_id).call(run_input=run_input)
+            run = client.actor(actor_id).call(run_input=run_input)
         except Exception as exc:
-            # No re-lanzamos exc directamente para evitar que el traceback
-            # exponga el token si está embebido en la excepción original.
             raise ApifyActorRunError(
-                f"El Actor '{self._actor_id}' falló durante la ejecución. "
+                f"El Actor '{actor_id}' falló durante la ejecución. "
                 f"Motivo: {type(exc).__name__}"
             ) from exc
 
-        # Verificar estado final del run.
-        # En apify-client>=3.x call() devuelve un objeto Run (Pydantic BaseModel),
-        # no un dict. Los atributos son snake_case: run.status, run.default_dataset_id.
         if run is None or run.status != "SUCCEEDED":
             status = run.status if run is not None else "None"
             raise ApifyActorRunError(
@@ -208,7 +327,6 @@ class ApifyInstagramAdapter:
                 "Se esperaba 'SUCCEEDED'."
             )
 
-        # Leer dataset — atributo snake_case del modelo Run
         dataset_id = run.default_dataset_id
         if not dataset_id:
             raise ApifyUnexpectedResponseError(
@@ -216,9 +334,7 @@ class ApifyInstagramAdapter:
             )
 
         try:
-            raw_items = list(
-                client.dataset(dataset_id).iterate_items()
-            )
+            raw_items = list(client.dataset(dataset_id).iterate_items())
         except Exception as exc:
             raise ApifyUnexpectedResponseError(
                 f"No se pudo leer el dataset '{dataset_id}': {type(exc).__name__}"
@@ -227,10 +343,9 @@ class ApifyInstagramAdapter:
         if not raw_items:
             raise ApifyEmptyDatasetError(
                 f"El dataset '{dataset_id}' está vacío. "
-                "Verificá que la URL sea pública y el Actor esté activo."
+                "Verificá que el perfil sea público y el Actor esté activo."
             )
 
-        # Verificación superficial de estructura (lista de dicts)
         if not isinstance(raw_items, list) or not all(
             isinstance(item, dict) for item in raw_items
         ):

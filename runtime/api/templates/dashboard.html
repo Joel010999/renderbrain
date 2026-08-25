@@ -17,7 +17,9 @@
             <tr>
                 <th>Name</th>
                 <th>Source</th>
+                <th>Type</th>
                 <th>Target</th>
+                <th>Scope</th>
                 <th>Interval (s)</th>
                 <th>Status</th>
                 <th>Updated At</th>
@@ -29,7 +31,11 @@
             <tr>
                 <td><strong><a href="/dashboard/missions/{{ m.id }}">{{ m.name }}</a></strong></td>
                 <td>{{ m.source }}</td>
+                <td>
+                    <span class="badge {{ 'badge-primary' if m.target_type == 'profile' else 'badge-secondary' }}">{{ m.target_type | upper }}</span>
+                </td>
                 <td>{{ m.target }}</td>
+                <td>{{ m.observation_scope or '—' }}</td>
                 <td>{{ m.interval_seconds }}</td>
                 <td>
                     {% if m.enabled %}
@@ -54,29 +60,50 @@
 </div>
 
 <!-- Modal Create Mission -->
-<div id="createModal" class="card" style="display:none; max-width: 500px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+<div id="createModal" class="card" style="display:none; max-width: 520px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
     <h3>Create Mission</h3>
     <div id="errorBox" class="error-msg"></div>
     <form id="createForm">
         <label>Name</label>
         <input type="text" id="name" required>
-        
+
         <label>Source</label>
         <select id="source" required>
             <option value="instagram">Instagram</option>
         </select>
-        
+
+        <label>Target Type</label>
+        <select id="target_type" required onchange="onTargetTypeChange()">
+            <option value="post">Post (URL individual)</option>
+            <option value="profile">Profile (cuenta de Instagram)</option>
+        </select>
+
         <label>Target</label>
-        <input type="text" id="target" placeholder="Username or URL" required>
-        
+        <input type="text" id="target" placeholder="URL de post o @username / URL de perfil" required>
+
+        <div id="profileFields" style="display:none;">
+            <label>Observation Scope <small style="color:#888;">(opcional)</small></label>
+            <select id="observation_scope">
+                <option value="">— Sin clasificar —</option>
+                <option value="competitor">Competitor</option>
+                <option value="inspiration">Inspiration</option>
+                <option value="market">Market</option>
+                <option value="client">Client</option>
+                <option value="reference">Reference</option>
+            </select>
+
+            <label>Stories Interval (seconds) <small style="color:#888;">Dejar vacío = sin stories</small></label>
+            <input type="number" id="story_interval_seconds" placeholder="Ej: 21600 (6h). Vacío = sin job de stories." min="60">
+        </div>
+
         <label>Interval (seconds)</label>
         <input type="number" id="interval" value="3600" min="60" required>
-        
+
         <div class="flex" style="margin-bottom: 1rem;">
             <input type="checkbox" id="enabled" checked style="width:auto; margin:0;">
             <label for="enabled" style="margin:0;">Enabled</label>
         </div>
-        
+
         <div class="flex">
             <button type="submit" class="btn btn-primary">Create</button>
             <button type="button" class="btn btn-secondary" onclick="document.getElementById('createModal').style.display='none'">Cancel</button>
@@ -85,6 +112,22 @@
 </div>
 
 <script>
+function onTargetTypeChange() {
+    const type = document.getElementById('target_type').value;
+    const profileFields = document.getElementById('profileFields');
+    const intervalInput = document.getElementById('interval');
+
+    if (type === 'profile') {
+        profileFields.style.display = 'block';
+        intervalInput.value = 86400;
+        document.getElementById('target').placeholder = '@username, URL de perfil o username limpio';
+    } else {
+        profileFields.style.display = 'none';
+        intervalInput.value = 3600;
+        document.getElementById('target').placeholder = 'URL de post (https://www.instagram.com/p/...)';
+    }
+}
+
 async function toggleMission(id, enable) {
     const action = enable ? 'enable' : 'disable';
     const res = await fetch(`/api/v1/missions/${id}/${action}`, { method: 'POST' });
@@ -97,20 +140,41 @@ async function toggleMission(id, enable) {
 
 document.getElementById('createForm').onsubmit = async (e) => {
     e.preventDefault();
+    const targetType = document.getElementById('target_type').value;
+    const storyIntervalRaw = document.getElementById('story_interval_seconds').value;
+
     const payload = {
         name: document.getElementById('name').value,
         source: document.getElementById('source').value,
         target: document.getElementById('target').value,
-        interval_seconds: parseInt(document.getElementById('interval').value),
-        enabled: document.getElementById('enabled').checked
+        target_type: targetType,
+        enabled: document.getElementById('enabled').checked,
     };
-    
+
+    // interval_seconds: para profile es opcional (backend pone 86400 por defecto)
+    const intervalVal = parseInt(document.getElementById('interval').value);
+    if (!isNaN(intervalVal)) {
+        payload.interval_seconds = intervalVal;
+    }
+
+    // Campos solo para profile
+    if (targetType === 'profile') {
+        const scope = document.getElementById('observation_scope').value;
+        if (scope) payload.observation_scope = scope;
+
+        const storyInterval = parseInt(storyIntervalRaw);
+        if (!isNaN(storyInterval) && storyInterval > 0) {
+            payload.story_interval_seconds = storyInterval;
+        }
+        // Si vacío → no se envía → backend no crea job de stories
+    }
+
     const res = await fetch('/api/v1/missions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
-    
+
     if (res.ok) {
         window.location.reload();
     } else {

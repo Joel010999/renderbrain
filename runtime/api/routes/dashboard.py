@@ -64,6 +64,10 @@ async def dashboard_mission_detail(
         name="mission_detail.html",
         context={
             "mission": mission,
-            "intelligence": intelligence
+            "intelligence": intelligence,
+            # A1.1 — campos de perfil para la vista de detalle
+            "is_profile": mission.target_type == "profile",
+            "observation_scope": mission.observation_scope,
+            "story_interval_seconds": mission.story_interval_seconds,
         }
     )

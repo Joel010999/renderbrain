@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
     APIFY_API_TOKEN: SecretStr | None = None
     APIFY_INSTAGRAM_ACTOR_ID: str = "apify/instagram-scraper"
+    # Actor dedicado para Stories (requiere sessionid cookie configurado en Apify)
+    APIFY_INSTAGRAM_STORIES_ACTOR_ID: str = "apify/instagram-stories-scraper"
+
+    # ---------------------------------------------------------------------------
+    # Instagram Profile Collection — A1.1
+    # Límites configurables para la recolección de contenido de perfiles.
+    # ---------------------------------------------------------------------------
+    INSTAGRAM_PROFILE_POST_LIMIT: int = 10
+    INSTAGRAM_PROFILE_REEL_LIMIT: int = 10
+    INSTAGRAM_PROFILE_STORY_LIMIT: int = 20
 
     # ---------------------------------------------------------------------------
     # OpenAI — proveedor de LLM (S3.2)

@@ -1,7 +1,13 @@
 """
 runtime/workers/fingerprint.py
 
-Estrategia de fingerprint V1 para la deduplicación de señales (S4.3).
+Estrategia de fingerprint V2 para la deduplicación de señales (A1.1).
+
+A1.1 — Cambios respecto a V1:
+    - Soporte de stories con namespace "story:" para evitar colisión con posts/reels.
+    - Prioridad de extracción de native_id extendida para stories (storyId).
+    - Namespace por content_type garantiza que:
+        instagram:story:<id>  ≠  instagram:<id>  (post/reel)
 
 Responsabilidad:
     Extraer una identidad estable y determinista de un RawSignalDetected
@@ -9,37 +15,31 @@ Responsabilidad:
 
 Principios de diseño:
 - Función pura: no hace I/O, no tiene efectos secundarios.
-- Determinista: el mismo post siempre genera el mismo fingerprint.
-- Identidad estable: basada en IDs nativos o URLs canónicas — nunca en
-  contenido mutable (caption, métricas, timestamps).
-- Fallo explícito: si no existe ninguna identidad estable, lanza
-  FingerprintError en lugar de generar un fingerprint basura.
+- Determinista: el mismo contenido siempre genera el mismo fingerprint.
+- Identidad estable: basada en IDs nativos o URLs canónicas.
+- Fallo explícito: si no existe ninguna identidad estable, lanza FingerprintError.
+- Sin colisiones: stories tienen namespace "story:", posts/reels no.
 
 Estrategia por fuente (source):
 
-    instagram:
-        Prioridad 1 — ID nativo del post:
-            raw_payload["data"]["id"] o raw_payload["data"]["shortCode"]
-            Formato: "instagram:<native_id>"
-            Razón: el ID de Instagram es inmutable aunque el caption o las
-            métricas cambien. Garantiza deduplicación exacta.
+    instagram (señales de perfil — A1.1):
+        Detecta content_type desde raw_payload["content_type"]:
+            "story":
+                ID → raw_payload["data"]["id"] o ["storyId"]
+                Formato: "instagram:story:<id>"
+            "reel" | "post" | None (legacy):
+                ID → raw_payload["data"]["id"] o ["shortCode"]
+                Formato: "instagram:<id>"
+        Fallback (todos los tipos): URL canónica limpia.
+        Fallo: FingerprintError si ninguna identidad disponible.
 
-        Prioridad 2 (fallback) — URL canónica sin query params:
-            raw_payload["url_queried"], limpiando tracking params.
-            Formato: "instagram:<clean_url>"
-            Razón: la URL del post es estable aunque cambie el shortCode
-            en algunos edge cases de Apify.
-
-        Fallo: excepción explícita si ninguna identidad está disponible.
-
-    Fuentes genéricas (manual_input, etc.):
-        Campo explícito raw_payload["fingerprint_id"].
-        Formato: "<source>:<fingerprint_id>"
-        Si no existe, lanza FingerprintError.
+    Fuentes genéricas:
+        raw_payload["fingerprint_id"] → "<source>:<fingerprint_id>"
+        Fallo: FingerprintError si ausente.
 
 Prohibiciones explícitas:
-    - NO usar hash del caption/content: mutable, rompe deduplicación.
-    - NO usar métricas (likes, reach): cambian con el tiempo.
+    - NO usar hash del caption/content: mutable.
+    - NO usar métricas: cambian con el tiempo.
     - NO usar timestamps: dependen del momento de captura.
     - NO usar el JSON completo: inestable ante campos nuevos de la API.
     - NO usar embeddings ni similitud semántica.
@@ -72,7 +72,8 @@ def compute_fingerprint(raw_signal: RawSignalDetected) -> str:
         raw_signal: RawSignalDetected producido por cualquier BaseSensor.
 
     Returns:
-        str: Fingerprint en formato "<source>:<identity>".
+        str: Fingerprint en formato "<source>:<identity>" o
+             "instagram:story:<id>" para stories.
              Siempre no vacío y determinista para el mismo input.
 
     Raises:
@@ -99,23 +100,60 @@ def compute_fingerprint(raw_signal: RawSignalDetected) -> str:
 
 def _fingerprint_instagram(payload: dict) -> str:
     """
-    Estrategia de fingerprint para señales de fuente 'instagram'.
+    Estrategia de fingerprint V2 para señales de fuente 'instagram'.
 
-    Prioridad 1: ID nativo del post (raw_payload["data"]["id"])
-    Prioridad 2: URL canónica sin query params (raw_payload["url_queried"])
+    Detecta content_type desde payload["content_type"] para aplicar
+    el namespace correcto y evitar colisiones entre stories y posts/reels.
+
+    Prioridad de identidad:
+        1. ID nativo desde payload["data"]["id"] o variantes por content_type
+        2. URL canónica desde payload["url_queried"] (fallback legacy)
+
+    Namespaces:
+        Stories: "instagram:story:<id>"
+        Posts/Reels/Legacy: "instagram:<id>"
 
     Raises:
         FingerprintError: Si ninguna identidad estable está disponible.
     """
-    # Prioridad 1: ID nativo del post de Instagram
+    content_type = payload.get("content_type")  # "story" | "reel" | "post" | None
     data = payload.get("data")
-    if isinstance(data, dict):
-        # Apify puede exponer el ID como "id" o "shortCode" según el endpoint
-        native_id = data.get("id") or data.get("shortCode")
-        if isinstance(native_id, str) and native_id.strip():
-            return f"instagram:{native_id.strip()}"
 
-    # Prioridad 2 (fallback): URL canónica sin query params de tracking
+    # --- Stories: namespace dedicado "story:" para evitar colisión ---
+    if content_type == "story":
+        if isinstance(data, dict):
+            # stories pueden tener id, storyId, o shortCode
+            story_id = (
+                _safe_str(data.get("id"))
+                or _safe_str(data.get("storyId"))
+                or _safe_str(data.get("shortCode"))
+            )
+            if story_id:
+                return f"instagram:story:{story_id}"
+
+        # Fallback URL para stories
+        url_queried = payload.get("url_queried")
+        if isinstance(url_queried, str) and url_queried.strip():
+            clean_url = _strip_query_params(url_queried.strip())
+            if clean_url:
+                return f"instagram:story:{clean_url}"
+
+        raise FingerprintError(
+            "Cannot compute Instagram story fingerprint: "
+            "raw_payload['data']['id'] (or 'storyId') and raw_payload['url_queried'] "
+            "are both missing or empty."
+        )
+
+    # --- Posts y Reels (incluyendo legacy sin content_type): namespace estándar ---
+    if isinstance(data, dict):
+        native_id = (
+            _safe_str(data.get("id"))
+            or _safe_str(data.get("shortCode"))
+        )
+        if native_id:
+            return f"instagram:{native_id}"
+
+    # Fallback legacy: URL canónica sin query params
     url_queried = payload.get("url_queried")
     if isinstance(url_queried, str) and url_queried.strip():
         clean_url = _strip_query_params(url_queried.strip())
@@ -128,6 +166,14 @@ def _fingerprint_instagram(payload: dict) -> str:
         "are both missing or empty. "
         "Ensure the Instagram adapter returns native post IDs."
     )
+
+
+def _safe_str(value) -> str | None:
+    """Convierte a str no vacío o retorna None."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
 
 
 def _strip_query_params(url: str) -> str:

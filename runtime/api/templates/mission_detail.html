@@ -14,8 +14,17 @@
     <div style="margin-top: 1rem;">
         <span class="badge {{ 'badge-success' if mission.enabled else 'badge-secondary' }}">{{ 'Enabled' if mission.enabled else 'Disabled' }}</span>
         <span class="badge badge-primary">{{ mission.source }}</span>
-        <strong>Target:</strong> {{ mission.target }} | 
+        <span class="badge {{ 'badge-primary' if mission.target_type == 'profile' else 'badge-secondary' }}">{{ mission.target_type | upper }}</span>
+        {% if observation_scope %}
+        <span class="badge badge-secondary">{{ observation_scope }}</span>
+        {% endif %}
+        <strong>Target:</strong> {{ mission.target }} |
         <strong>Interval:</strong> {{ mission.interval_seconds }}s |
+        {% if is_profile and story_interval_seconds %}
+        <strong>Stories:</strong> every {{ story_interval_seconds }}s |
+        {% elif is_profile %}
+        <strong>Stories:</strong> not configured |
+        {% endif %}
         <strong>Updated:</strong> {{ mission.updated_at.strftime('%Y-%m-%d %H:%M:%S') if mission.updated_at else mission.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
     </div>
 </div>
@@ -81,24 +90,42 @@
 </div>
 
 <!-- Modal Edit Mission -->
-<div id="editModal" class="card" style="display:none; max-width: 500px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+<div id="editModal" class="card" style="display:none; max-width: 520px; margin: 0 auto; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
     <h3>Edit Mission</h3>
     <div id="errorBox" class="error-msg"></div>
     <form id="editForm">
         <label>Name</label>
         <input type="text" id="name" value="{{ mission.name }}" required>
-        
+
         <label>Target</label>
         <input type="text" id="target" value="{{ mission.target }}" required>
-        
+
         <label>Interval (seconds)</label>
         <input type="number" id="interval" value="{{ mission.interval_seconds }}" min="60" required>
-        
+
+        {% if is_profile %}
+        <label>Observation Scope</label>
+        <select id="observation_scope">
+            <option value="">— Sin clasificar —</option>
+            <option value="competitor" {% if observation_scope == 'competitor' %}selected{% endif %}>Competitor</option>
+            <option value="inspiration" {% if observation_scope == 'inspiration' %}selected{% endif %}>Inspiration</option>
+            <option value="market" {% if observation_scope == 'market' %}selected{% endif %}>Market</option>
+            <option value="client" {% if observation_scope == 'client' %}selected{% endif %}>Client</option>
+            <option value="reference" {% if observation_scope == 'reference' %}selected{% endif %}>Reference</option>
+        </select>
+
+        <label>Stories Interval (seconds) <small style="color:#888;">Vacío = sin job de stories</small></label>
+        <input type="number" id="story_interval_seconds"
+               value="{{ story_interval_seconds or '' }}"
+               placeholder="Ej: 21600 (6h). Vacío = sin stories."
+               min="60">
+        {% endif %}
+
         <div class="flex" style="margin-bottom: 1rem;">
             <input type="checkbox" id="enabled" {% if mission.enabled %}checked{% endif %} style="width:auto; margin:0;">
             <label for="enabled" style="margin:0;">Enabled</label>
         </div>
-        
+
         <div class="flex">
             <button type="submit" class="btn btn-primary">Save</button>
             <button type="button" class="btn btn-secondary" onclick="document.getElementById('editModal').style.display='none'">Cancel</button>
@@ -125,13 +152,31 @@ document.getElementById('editForm').onsubmit = async (e) => {
         interval_seconds: parseInt(document.getElementById('interval').value),
         enabled: document.getElementById('enabled').checked
     };
-    
+
+    // Campos de perfil: solo si existen en el DOM (is_profile = true)
+    const scopeEl = document.getElementById('observation_scope');
+    if (scopeEl) {
+        const scope = scopeEl.value;
+        if (scope) payload.observation_scope = scope;
+    }
+
+    const storyEl = document.getElementById('story_interval_seconds');
+    if (storyEl) {
+        const storyVal = parseInt(storyEl.value);
+        if (!isNaN(storyVal) && storyVal > 0) {
+            payload.story_interval_seconds = storyVal;
+        } else if (storyEl.value === '' || storyEl.value === '0') {
+            // Explícitamente sin stories: enviar null para borrar el job
+            payload.story_interval_seconds = null;
+        }
+    }
+
     const res = await fetch('/api/v1/missions/{{ mission.id }}', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
-    
+
     if (res.ok) {
         window.location.reload();
     } else {

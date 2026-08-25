@@ -1,7 +1,12 @@
 """
 runtime/infrastructure/database/models/mission.py
 
-Modelos de SQLAlchemy para Missions y ProcessedSignals (S4.1).
+Modelos de SQLAlchemy para Missions y ProcessedSignals.
+
+A1.1 — Extensión de MissionModel:
+    - target_type: VARCHAR DEFAULT 'post' — retrocompatible con misiones existentes
+    - observation_scope: VARCHAR NULL — propósito de observación del perfil
+    - story_interval_seconds: INTEGER NULL — intervalo dedicado para stories
 """
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
@@ -17,6 +22,11 @@ class MissionModel(Base):
     name = Column(String, nullable=False)
     source = Column(String, nullable=False)
     target = Column(String, nullable=False)
+    # A1.1 — nuevos campos de perfil
+    target_type = Column(String(50), nullable=False, default="post", server_default="post")
+    observation_scope = Column(String(50), nullable=True)
+    story_interval_seconds = Column(Integer, nullable=True)
+    # campos existentes
     enabled = Column(Boolean, nullable=False, default=True)
     interval_seconds = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)

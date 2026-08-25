@@ -47,18 +47,32 @@ async def create_mission(
 ):
     """
     Crea una nueva misión operativa.
+
+    Soporta target_type='post' (URL de post individual) y
+    target_type='profile' (perfil de Instagram para recolección diaria).
+
+    Para target_type='profile':
+    - interval_seconds default: 86400 (24h).
+    - El target se normaliza automáticamente (acepta @user, URL, o username limpio).
+    - observation_scope clasifica el propósito: competitor|inspiration|market|client|reference.
     """
     if request.source not in SUPPORTED_SENSOR_SOURCES:
-        raise HTTPException(status_code=422, detail=f"Unsupported source. Supported sources: {list(SUPPORTED_SENSOR_SOURCES)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported source. Supported sources: {list(SUPPORTED_SENSOR_SOURCES)}"
+        )
 
     mission = Mission(
         name=request.name,
         source=request.source,
         target=request.target,
+        target_type=request.target_type,
+        observation_scope=request.observation_scope,
         interval_seconds=request.interval_seconds,
+        story_interval_seconds=request.story_interval_seconds,
         enabled=request.enabled,
     )
-    
+
     try:
         await repo.save(mission)
         await session.commit()
@@ -77,13 +91,17 @@ async def update_mission(
 ):
     """
     Actualiza parcialmente una misión existente.
+    Soporta edición de target_type, observation_scope y story_interval_seconds.
     """
     update_data = request.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=422, detail="At least one field must be provided for update.")
 
     if "source" in update_data and update_data["source"] not in SUPPORTED_SENSOR_SOURCES:
-        raise HTTPException(status_code=422, detail=f"Unsupported source. Supported sources: {list(SUPPORTED_SENSOR_SOURCES)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported source. Supported sources: {list(SUPPORTED_SENSOR_SOURCES)}"
+        )
 
     mission = await repo.get_by_id(mission_id)
     if not mission:
@@ -91,7 +109,7 @@ async def update_mission(
 
     from datetime import datetime, timezone
     mission.updated_at = datetime.now(timezone.utc)
-    
+
     for field, value in update_data.items():
         setattr(mission, field, value)
 
@@ -127,7 +145,7 @@ async def enable_mission(
         except Exception:
             await session.rollback()
             raise
-        
+
     return mission
 
 
@@ -154,5 +172,5 @@ async def disable_mission(
         except Exception:
             await session.rollback()
             raise
-        
+
     return mission

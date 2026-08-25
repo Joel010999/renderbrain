@@ -1,6 +1,6 @@
 [project]
 name = "renderbrain"
-version = "1.0.2"
+version = "1.1.0"
 description = "RenderBrain - Content Intelligence Engine"
 authors = [
     { name = "Joel", email = "joeljjs100@gmail.com" }

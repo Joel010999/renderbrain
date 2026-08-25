@@ -3,6 +3,10 @@ runtime/infrastructure/database/repositories/canonical_signal.py
 
 CanonicalSignalRepository — persistencia asíncrona de CanonicalSignal.
 
+A1.1 — Actualizado para incluir:
+    - content_type, native_id (clasificación de contenido)
+    - source_account_username, source_account_name, source_account_id (provenance)
+
 Responsabilidades:
     save(signal)        → persiste un CanonicalSignal (contrato Pydantic).
     get_by_id(id)       → devuelve CanonicalSignal | None (contrato Pydantic).
@@ -10,13 +14,7 @@ Responsabilidades:
 Principios de diseño:
 - El repositorio recibe y devuelve el contrato Pydantic CanonicalSignal.
   El modelo ORM CanonicalSignalModel nunca se expone fuera de esta capa.
-- El mapeo CanonicalSignal ↔ CanonicalSignalModel está encapsulado en los
-  métodos privados _to_orm() y _to_domain().
 - Inmutabilidad: NO hay update(), delete(), listados ni filtros.
-- La sesión se inyecta en el constructor para facilitar el testing y
-  mantener la gestión del ciclo de vida fuera del repositorio.
-- Si get_by_id() no encuentra la fila, devuelve None (sin excepciones
-  de dominio en este MVP).
 """
 
 from uuid import UUID
@@ -47,10 +45,6 @@ class CanonicalSignalRepository:
     async def save(self, signal: CanonicalSignal) -> None:
         """
         Persiste un CanonicalSignal en la tabla canonical_signals.
-
-        Mapea el contrato Pydantic al modelo ORM y lo agrega a la sesión.
-        El commit es responsabilidad del llamador (o del context-manager
-        get_session() de la infraestructura).
 
         Args:
             signal: CanonicalSignal (contrato Pydantic) a persistir.
@@ -93,6 +87,11 @@ class CanonicalSignalRepository:
             source_event_id=signal.source_event_id,
             source=signal.source,
             sensor=signal.sensor,
+            content_type=signal.content_type,
+            native_id=signal.native_id,
+            source_account_username=signal.source_account_username,
+            source_account_name=signal.source_account_name,
+            source_account_id=signal.source_account_id,
             content=signal.content,
             author=signal.author,
             language=signal.language,
@@ -110,6 +109,11 @@ class CanonicalSignalRepository:
             source_event_id=model.source_event_id,
             source=model.source,
             sensor=model.sensor,
+            content_type=model.content_type,
+            native_id=model.native_id,
+            source_account_username=model.source_account_username,
+            source_account_name=model.source_account_name,
+            source_account_id=model.source_account_id,
             content=model.content,
             author=model.author,
             language=model.language,

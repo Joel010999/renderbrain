@@ -3,16 +3,19 @@ runtime/infrastructure/database/models/canonical_signal.py
 
 Modelo ORM SQLAlchemy para la tabla `canonical_signals`.
 
+A1.1 — Extensión:
+    - content_type: VARCHAR NULL — "reel" | "post" | "story"
+    - native_id: VARCHAR NULL — ID nativo de Instagram
+    - source_account_username: VARCHAR NULL — provenance de la cuenta
+    - source_account_name: VARCHAR NULL — nombre de display de la cuenta
+    - source_account_id: VARCHAR NULL — ID numérico de la cuenta
+
 Principios de diseño:
 - Hereda de Base (DeclarativeBase) definida en session.py.
-  No se crea un segundo metadata ni engine.
 - Separación estricta de capas: este modelo NO es el contrato Pydantic.
-  La conversión CanonicalSignal ↔ CanonicalSignalModel ocurre
-  exclusivamente en el Repository.
 - UUIDs como tipos nativos (SQLAlchemy Uuid, nativo en PG como uuid).
 - Timestamps con timezone=True para garantizar consistencia UTC en PG.
-- metrics usa JSON (estándar SQL); PostgreSQL lo almacena como jsonb
-  internamente cuando el driver asyncpg lo negocia.
+- metrics usa JSON (estándar SQL); PostgreSQL lo almacena como jsonb.
 - No hay columnas updated_at ni deleted_at: la señal canónica es inmutable.
 """
 
@@ -62,6 +65,34 @@ class CanonicalSignalModel(Base):
     sensor: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
+    )
+
+    # ------------------------------------------------------------------
+    # Clasificación de contenido — A1.1
+    # ------------------------------------------------------------------
+    content_type: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+    native_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
+    # ------------------------------------------------------------------
+    # Provenance de cuenta — A1.1
+    # ------------------------------------------------------------------
+    source_account_username: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    source_account_name: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    source_account_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
     )
 
     # ------------------------------------------------------------------

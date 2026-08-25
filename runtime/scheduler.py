@@ -45,12 +45,39 @@ async def _execute_job(mission_id: str, sensor_factory: SensorFactory) -> None:
             repo = MissionRepository(session)
             mission = await repo.get_by_id(UUID(mission_id))
 
-        if mission and mission.enabled:
-            await orchestrator.execute_mission(mission)
-        elif mission and not mission.enabled:
-            logger.info("Mission is disabled, skipping execution", extra={"mission_id": mission_id})
-        else:
-            logger.warning("Mission not found in DB during execution", extra={"mission_id": mission_id})
+            if mission and mission.enabled:
+                is_bootstrap = (mission.target_type == "profile" and mission.last_collected_at is None)
+                if is_bootstrap:
+                    logger.info(
+                        "Profile bootstrap collection started",
+                        extra={"mission_id": mission_id, "target": mission.target}
+                    )
+                elif mission.target_type == "profile":
+                    logger.info(
+                        "Profile scheduled collection started",
+                        extra={"mission_id": mission_id, "target": mission.target}
+                    )
+
+                from datetime import datetime, timezone
+                mission.last_collected_at = datetime.now(timezone.utc)
+                await repo.save(mission)
+                await session.commit()
+            else:
+                if mission and not mission.enabled:
+                    logger.info("Mission is disabled, skipping execution", extra={"mission_id": mission_id})
+                else:
+                    logger.warning("Mission not found in DB during execution", extra={"mission_id": mission_id})
+                return
+
+        # Execute orchestrator outside the session lock
+        await orchestrator.execute_mission(mission)
+
+        if is_bootstrap:
+            logger.info(
+                "Profile bootstrap collection completed",
+                extra={"mission_id": mission_id, "items_collected": "delegated_to_sensor"}
+            )
+
     except Exception as e:
         logger.error(
             "Unhandled error in job wrapper",
@@ -133,6 +160,12 @@ async def sync_missions(scheduler: AsyncIOScheduler, sensor_factory: SensorFacto
             job_id = str(mission.id)
             job = scheduler.get_job(job_id)
 
+            # A1.1: Bootstrap logic. Si es perfil y nunca recolectó, ejecutar de inmediato
+            kwargs = {}
+            if mission.target_type == "profile" and mission.last_collected_at is None:
+                from datetime import datetime, timezone
+                kwargs["next_run_time"] = datetime.now(timezone.utc)
+
             if job:
                 # Si existe pero cambió el intervalo, reprogramar
                 if job.trigger.interval.total_seconds() != mission.interval_seconds:
@@ -152,6 +185,7 @@ async def sync_missions(scheduler: AsyncIOScheduler, sensor_factory: SensorFacto
                     seconds=mission.interval_seconds,
                     id=job_id,
                     args=[job_id, sensor_factory],
+                    **kwargs
                 )
                 logger.info(
                     "Added new mission job",
@@ -159,6 +193,7 @@ async def sync_missions(scheduler: AsyncIOScheduler, sensor_factory: SensorFacto
                         "mission_id": job_id,
                         "target_type": mission.target_type,
                         "interval": mission.interval_seconds,
+                        "is_bootstrap": "next_run_time" in kwargs
                     },
                 )
 

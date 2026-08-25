@@ -39,6 +39,7 @@ class MissionRepository:
             interval_seconds=mission.interval_seconds,
             created_at=mission.created_at,
             updated_at=mission.updated_at,
+            last_collected_at=mission.last_collected_at,
         )
         await self._session.merge(model)
         await self._session.flush()
@@ -89,4 +90,5 @@ class MissionRepository:
             interval_seconds=m.interval_seconds,
             created_at=m.created_at,
             updated_at=m.updated_at,
+            last_collected_at=m.last_collected_at,
         )

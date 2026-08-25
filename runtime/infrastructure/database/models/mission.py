@@ -31,6 +31,7 @@ class MissionModel(Base):
     interval_seconds = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=True)
+    last_collected_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class ProcessedSignalModel(Base):

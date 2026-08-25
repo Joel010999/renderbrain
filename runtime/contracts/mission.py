@@ -124,6 +124,7 @@ class Mission(BaseModel):
     )
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime | None = None
+    last_collected_at: datetime | None = None
 
     @field_validator("name", "source", "target")
     @classmethod

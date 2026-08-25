@@ -338,3 +338,64 @@ class TestAPIRequestValidationPydantic:
         assert req.story_interval_seconds == 21600
         assert req.interval_seconds == 86400
 
+
+class TestAPIUpdateRequestPydantic:
+    def test_update_to_profile_normalizes_target(self):
+        req = MissionUpdateRequest(
+            target_type="profile",
+            target="https://www.instagram.com/whapycom/",
+            observation_scope="competitor",
+            interval_seconds=86400,
+            story_interval_seconds=None
+        )
+        assert req.target_type == "profile"
+        assert req.target == "whapycom"
+        assert req.observation_scope == "competitor"
+        assert req.interval_seconds == 86400
+        assert req.story_interval_seconds is None
+
+    def test_update_to_post_does_not_normalize_target(self):
+        req = MissionUpdateRequest(
+            target_type="post",
+            target="https://www.instagram.com/p/ABC/"
+        )
+        assert req.target_type == "post"
+        assert req.target == "https://www.instagram.com/p/ABC/"
+
+
+# ---------------------------------------------------------------------------
+# T_DASH06 — HTML Rendering de mission_detail.html
+# ---------------------------------------------------------------------------
+
+class TestMissionDetailHTMLRender:
+    def test_mission_detail_edit_form_contains_new_fields(self):
+        """El HTML de Edit Mission debe incluir target_type, observation_scope y story_interval_seconds."""
+        import jinja2
+        from datetime import datetime
+
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader("runtime/api/templates"))
+        template = env.get_template("mission_detail.html")
+
+        # Misión mockeada
+        mock_mission = Mission(
+            id=uuid4(),
+            name="Legacy Post",
+            source="instagram",
+            target="https://www.instagram.com/p/123/",
+            target_type="post",
+            interval_seconds=3600,
+            created_at=datetime.now()
+        )
+
+        html = template.render(
+            mission=mock_mission,
+            is_profile=False,
+            observation_scope=None,
+            story_interval_seconds=None,
+            intelligence={"opportunities": [], "patterns": [], "insights": []}
+        )
+
+        # Confirmar que los campos están en el HTML generado
+        assert 'id="target_type"' in html or 'name="target_type"' in html
+        assert 'id="observation_scope"' in html or 'name="observation_scope"' in html
+        assert 'id="story_interval_seconds"' in html or 'name="story_interval_seconds"' in html

@@ -37,7 +37,7 @@
             <li style="margin-bottom: 0.5rem;">
                 <strong>Opportunity:</strong> {{ o.content }} <br>
                 <small style="color: #666;">
-                    Confidence: {{ o.confidence }} | 
+                    Confidence: {{ o.confidence }} |
                     Supporting Patterns: {{ o.supporting_pattern_ids | length }} |
                     Date: {{ o.created_at.strftime('%Y-%m-%d %H:%M') }}
                 </small>
@@ -57,7 +57,7 @@
             <li style="margin-bottom: 0.5rem;">
                 <strong>Pattern:</strong> {{ p.content }} <br>
                 <small style="color: #666;">
-                    Confidence: {{ p.confidence }} | 
+                    Confidence: {{ p.confidence }} |
                     Support Count: {{ p.support_count }} |
                     Supporting Insights: {{ p.supporting_insight_ids | length }} |
                     Date: {{ p.created_at.strftime('%Y-%m-%d %H:%M') }}
@@ -78,7 +78,7 @@
             <li style="margin-bottom: 0.5rem;">
                 {{ i.content }} <br>
                 <small style="color: #666;">
-                    Confidence: {{ i.confidence }} | 
+                    Confidence: {{ i.confidence }} |
                     Date: {{ i.created_at.strftime('%Y-%m-%d %H:%M') }}
                 </small>
             </li>
@@ -97,29 +97,35 @@
         <label>Name</label>
         <input type="text" id="name" value="{{ mission.name }}" required>
 
+        <label>Target Type</label>
+        <select id="target_type" required onchange="onEditTargetTypeChange()">
+            <option value="post" {% if mission.target_type == 'post' %}selected{% endif %}>Post (URL individual)</option>
+            <option value="profile" {% if mission.target_type == 'profile' %}selected{% endif %}>Profile (cuenta de Instagram)</option>
+        </select>
+
         <label>Target</label>
         <input type="text" id="target" value="{{ mission.target }}" required>
 
         <label>Interval (seconds)</label>
         <input type="number" id="interval" value="{{ mission.interval_seconds }}" min="60" required>
 
-        {% if is_profile %}
-        <label>Observation Scope</label>
-        <select id="observation_scope">
-            <option value="">— Sin clasificar —</option>
-            <option value="competitor" {% if observation_scope == 'competitor' %}selected{% endif %}>Competitor</option>
-            <option value="inspiration" {% if observation_scope == 'inspiration' %}selected{% endif %}>Inspiration</option>
-            <option value="market" {% if observation_scope == 'market' %}selected{% endif %}>Market</option>
-            <option value="client" {% if observation_scope == 'client' %}selected{% endif %}>Client</option>
-            <option value="reference" {% if observation_scope == 'reference' %}selected{% endif %}>Reference</option>
-        </select>
+        <div id="editProfileFields" style="display: {% if mission.target_type == 'profile' %}block{% else %}none{% endif %};">
+            <label>Observation Scope</label>
+            <select id="observation_scope">
+                <option value="">— Sin clasificar —</option>
+                <option value="competitor" {% if observation_scope == 'competitor' %}selected{% endif %}>Competitor</option>
+                <option value="inspiration" {% if observation_scope == 'inspiration' %}selected{% endif %}>Inspiration</option>
+                <option value="market" {% if observation_scope == 'market' %}selected{% endif %}>Market</option>
+                <option value="client" {% if observation_scope == 'client' %}selected{% endif %}>Client</option>
+                <option value="reference" {% if observation_scope == 'reference' %}selected{% endif %}>Reference</option>
+            </select>
 
-        <label>Stories Interval (seconds) <small style="color:#888;">Vacío = sin job de stories</small></label>
-        <input type="number" id="story_interval_seconds"
-               value="{{ story_interval_seconds or '' }}"
-               placeholder="Ej: 21600 (6h). Vacío = sin stories."
-               min="60">
-        {% endif %}
+            <label>Stories Interval (seconds) <small style="color:#888;">Vacío = sin job de stories</small></label>
+            <input type="number" id="story_interval_seconds"
+                   value="{{ story_interval_seconds or '' }}"
+                   placeholder="Ej: 21600 (6h). Vacío = sin stories."
+                   min="60">
+        </div>
 
         <div class="flex" style="margin-bottom: 1rem;">
             <input type="checkbox" id="enabled" {% if mission.enabled %}checked{% endif %} style="width:auto; margin:0;">
@@ -144,31 +150,43 @@ async function toggleMission(id, enable) {
     }
 }
 
+function onEditTargetTypeChange() {
+    const type = document.getElementById('target_type').value;
+    const profileFields = document.getElementById('editProfileFields');
+    if (type === 'profile') {
+        profileFields.style.display = 'block';
+    } else {
+        profileFields.style.display = 'none';
+    }
+}
+
 document.getElementById('editForm').onsubmit = async (e) => {
     e.preventDefault();
+    const targetType = document.getElementById('target_type').value;
+
     const payload = {
         name: document.getElementById('name').value,
         target: document.getElementById('target').value,
+        target_type: targetType,
         interval_seconds: parseInt(document.getElementById('interval').value),
         enabled: document.getElementById('enabled').checked
     };
 
-    // Campos de perfil: solo si existen en el DOM (is_profile = true)
-    const scopeEl = document.getElementById('observation_scope');
-    if (scopeEl) {
-        const scope = scopeEl.value;
+    if (targetType === 'profile') {
+        const scope = document.getElementById('observation_scope').value;
         if (scope) payload.observation_scope = scope;
-    }
+        else payload.observation_scope = null; // Explicitly clear if empty
 
-    const storyEl = document.getElementById('story_interval_seconds');
-    if (storyEl) {
-        const storyVal = parseInt(storyEl.value);
+        const storyVal = parseInt(document.getElementById('story_interval_seconds').value);
         if (!isNaN(storyVal) && storyVal > 0) {
             payload.story_interval_seconds = storyVal;
-        } else if (storyEl.value === '' || storyEl.value === '0') {
-            // Explícitamente sin stories: enviar null para borrar el job
+        } else {
             payload.story_interval_seconds = null;
         }
+    } else {
+        // If post, ensure these are cleared
+        payload.observation_scope = null;
+        payload.story_interval_seconds = null;
     }
 
     const res = await fetch('/api/v1/missions/{{ mission.id }}', {

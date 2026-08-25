@@ -185,3 +185,14 @@ class MissionUpdateRequest(BaseModel):
         if v is not None and v <= 0:
             raise ValueError("story_interval_seconds debe ser mayor a 0.")
         return v
+
+    @model_validator(mode="after")
+    def apply_profile_normalization(self) -> "MissionUpdateRequest":
+        if self.target_type == "profile" and self.target is not None:
+            try:
+                self.target = normalize_instagram_username(self.target)
+            except ValueError as exc:
+                raise ValueError(
+                    f"El campo 'target' no es un perfil de Instagram válido: {exc}"
+                ) from exc
+        return self

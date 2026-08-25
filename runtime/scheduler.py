@@ -45,32 +45,39 @@ async def _execute_job(mission_id: str, sensor_factory: SensorFactory) -> None:
             repo = MissionRepository(session)
             mission = await repo.get_by_id(UUID(mission_id))
 
-            if mission and mission.enabled:
-                is_bootstrap = (mission.target_type == "profile" and mission.last_collected_at is None)
-                if is_bootstrap:
-                    logger.info(
-                        "Profile bootstrap collection started",
-                        extra={"mission_id": mission_id, "target": mission.target}
-                    )
-                elif mission.target_type == "profile":
-                    logger.info(
-                        "Profile scheduled collection started",
-                        extra={"mission_id": mission_id, "target": mission.target}
-                    )
-
-                from datetime import datetime, timezone
-                mission.last_collected_at = datetime.now(timezone.utc)
-                await repo.save(mission)
-                await session.commit()
-            else:
-                if mission and not mission.enabled:
-                    logger.info("Mission is disabled, skipping execution", extra={"mission_id": mission_id})
-                else:
-                    logger.warning("Mission not found in DB during execution", extra={"mission_id": mission_id})
+            if not mission:
+                logger.warning("Mission not found in DB during execution", extra={"mission_id": mission_id})
+                return
+            if not mission.enabled:
+                logger.info("Mission is disabled, skipping execution", extra={"mission_id": mission_id})
                 return
 
+            is_bootstrap = (mission.target_type == "profile" and mission.last_collected_at is None)
+            if is_bootstrap:
+                logger.info(
+                    "Profile bootstrap collection started",
+                    extra={"mission_id": mission_id, "target": mission.target}
+                )
+            elif mission.target_type == "profile":
+                logger.info(
+                    "Profile scheduled collection started",
+                    extra={"mission_id": mission_id, "target": mission.target}
+                )
+
         # Execute orchestrator outside the session lock
+        # Si esto lanza una excepción (ej. fallo global de Apify), el flujo se corta
+        # y no se actualiza last_collected_at.
         await orchestrator.execute_mission(mission)
+
+        # Persistir el éxito
+        async with async_session() as session:
+            repo = MissionRepository(session)
+            mission_update = await repo.get_by_id(UUID(mission_id))
+            if mission_update:
+                from datetime import datetime, timezone
+                mission_update.last_collected_at = datetime.now(timezone.utc)
+                await repo.save(mission_update)
+                await session.commit()
 
         if is_bootstrap:
             logger.info(
@@ -160,14 +167,24 @@ async def sync_missions(scheduler: AsyncIOScheduler, sensor_factory: SensorFacto
             job_id = str(mission.id)
             job = scheduler.get_job(job_id)
 
-            # A1.1: Bootstrap logic. Si es perfil y nunca recolectó, ejecutar de inmediato
+            # A1.1: Bootstrap & Restart logic for Profiles
             kwargs = {}
-            if mission.target_type == "profile" and mission.last_collected_at is None:
-                from datetime import datetime, timezone
-                kwargs["next_run_time"] = datetime.now(timezone.utc)
+            if mission.target_type == "profile":
+                from datetime import datetime, timedelta, timezone
+                now = datetime.now(timezone.utc)
+                if mission.last_collected_at is None:
+                    # Bootstrap: ejecutar de inmediato
+                    kwargs["next_run_time"] = now
+                else:
+                    # Calcular el siguiente tiempo exacto
+                    next_run = mission.last_collected_at + timedelta(seconds=mission.interval_seconds)
+                    if next_run <= now:
+                        kwargs["next_run_time"] = now
+                    else:
+                        kwargs["next_run_time"] = next_run
 
             if job:
-                # Si existe pero cambió el intervalo, reprogramar
+                # Si existe pero cambió el intervalo o la cadencia, reprogramar
                 if job.trigger.interval.total_seconds() != mission.interval_seconds:
                     scheduler.reschedule_job(
                         job_id,
@@ -193,7 +210,7 @@ async def sync_missions(scheduler: AsyncIOScheduler, sensor_factory: SensorFacto
                         "mission_id": job_id,
                         "target_type": mission.target_type,
                         "interval": mission.interval_seconds,
-                        "is_bootstrap": "next_run_time" in kwargs
+                        "is_bootstrap": "next_run_time" in kwargs and mission.last_collected_at is None
                     },
                 )
 

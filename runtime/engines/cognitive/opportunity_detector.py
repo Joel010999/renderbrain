@@ -34,7 +34,8 @@ class OpportunityDetectionResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     opportunity_found: bool
-    content: str | None = None
+    title: str | None = None
+    description: str | None = None
     confidence: float | None = None
     supporting_pattern_indexes: list[int] | None = None
     reason: str | None = None
@@ -81,8 +82,8 @@ class OpportunityDetector:
         if not result.opportunity_found:
             return None, []
 
-        if not result.content or not result.supporting_pattern_indexes:
-            raise ValueError("El LLM indicó opportunity_found=True pero no proveyó content o supporting_pattern_indexes.")
+        if not result.title or not result.description or not result.supporting_pattern_indexes:
+            raise ValueError("El LLM indicó opportunity_found=True pero no proveyó title, description o supporting_pattern_indexes.")
 
         # Validaciones semánticas de índices — InvalidOpportunitySupportError (controlada)
         unique_indexes = list(set(result.supporting_pattern_indexes))
@@ -92,6 +93,7 @@ class OpportunityDetector:
             )
 
         supporting_ids = []
+        total_support = 0
         for idx in unique_indexes:
             if idx < 0 or idx >= len(intelligence_view.patterns):
                 raise InvalidOpportunitySupportError(
@@ -99,11 +101,22 @@ class OpportunityDetector:
                     f"Total patterns: {len(intelligence_view.patterns)}. "
                     f"Índices válidos: 0..{len(intelligence_view.patterns) - 1}."
                 )
-            supporting_ids.append(intelligence_view.patterns[idx].id)
+            pattern = intelligence_view.patterns[idx]
+            supporting_ids.append(pattern.id)
+            total_support += pattern.support_count
+
+        # Prioridad determinista
+        priority = "low"
+        if total_support >= 5:
+            priority = "high"
+        elif total_support >= 3:
+            priority = "medium"
 
         opportunity = Opportunity(
             mission_id=mission_id,
-            content=result.content,
+            title=result.title,
+            description=result.description,
+            priority=priority,
             confidence=result.confidence,
         )
 
@@ -148,7 +161,8 @@ Reglas Críticas:
 4. Responde estrictamente con un JSON válido usando esta estructura:
 {{
     "opportunity_found": true/false,
-    "content": "Descripción de la acción estratégica concreta",
+    "title": "Título corto de la oportunidad",
+    "description": "Descripción de la acción estratégica concreta",
     "confidence": 0.88,
     "supporting_pattern_indexes": [0, ...],
     "reason": "Explicación breve"

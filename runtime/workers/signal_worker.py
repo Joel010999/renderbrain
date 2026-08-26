@@ -243,7 +243,10 @@ class SignalWorker:
                     # ----------------------------------------------------------
                     from runtime.engines.cognitive.retriever import KnowledgeContextRetriever
                     from runtime.infrastructure.database.repositories.knowledge import KnowledgeCoreRepository
-                    from runtime.engines.cognitive.pattern_detector import PatternDetector
+                    from runtime.engines.cognitive.pattern_detector import (
+                        PatternDetector,
+                        InvalidPatternOutputError,
+                    )
                     
                     repo = KnowledgeCoreRepository(session)
                     retriever = KnowledgeContextRetriever(repository=repo)
@@ -267,11 +270,23 @@ class SignalWorker:
                         # ----------------------------------------------------------
                         pattern_detector = PatternDetector(llm_provider=self._llm_provider)
                         
-                        pattern, supporting_ids = await pattern_detector.detect(
-                            mission_id=canonical.mission_id,
-                            mission_context=self._mission_context,
-                            intelligence_view=intelligence_view,
-                        )
+                        try:
+                            pattern, supporting_ids = await pattern_detector.detect(
+                                mission_id=canonical.mission_id,
+                                mission_context=self._mission_context,
+                                intelligence_view=intelligence_view,
+                            )
+                        except InvalidPatternOutputError as pat_err:
+                            logger.warning(
+                                "Invalid pattern output indexes — discarding pattern, preserving valid intelligence",
+                                extra={
+                                    "error": str(pat_err),
+                                    "fingerprint": fingerprint,
+                                    "canonical_signal_id": str(canonical.id),
+                                }
+                            )
+                            pattern = None
+                            supporting_ids = []
                         
                         if pattern:
                             await repo.add_pattern(pattern, supporting_ids)

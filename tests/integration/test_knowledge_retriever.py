@@ -138,7 +138,7 @@ async def test_retriever_limits_and_order():
             
         for i in range(6):
             session.add(OpportunityModel(
-                id=uuid4(), mission_id=mission_id, content=f'Opportunity {i}',
+                id=uuid4(), mission_id=mission_id, title=f'Opp {i}', description=f'Opportunity {i}', priority='medium',
                 created_at=base_time + timedelta(seconds=i)
             ))
             
@@ -161,8 +161,8 @@ async def test_retriever_limits_and_order():
         assert context.patterns[0].content == 'Pattern 14'
         assert context.patterns[-1].content == 'Pattern 5'
         
-        assert context.opportunities[0].content == 'Opportunity 5'
-        assert context.opportunities[-1].content == 'Opportunity 1'
+        assert context.opportunities[0].description == 'Opportunity 5'
+        assert context.opportunities[-1].description == 'Opportunity 1'
         
         # Test explicit limits
         context2 = await retriever.retrieve(mission_id, insight_limit=5, pattern_limit=3, opportunity_limit=2)

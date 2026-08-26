@@ -59,7 +59,8 @@ def _make_view(num_patterns: int = 1) -> MissionIntelligenceView:
 def _opp_response(indexes: list[int]) -> str:
     return json.dumps({
         "opportunity_found": True,
-        "content": "Strategic action derived from patterns",
+        "title": "A strategic opportunity",
+        "description": "Strategic action derived from patterns",
         "confidence": 0.88,
         "supporting_pattern_indexes": indexes,
         "reason": "Patterns support this opportunity",
@@ -127,7 +128,9 @@ async def test_valid_index_zero_returns_opportunity():
     )
 
     assert opportunity is not None, "Debe retornar Opportunity con índice [0] válido"
-    assert opportunity.content == "Strategic action derived from patterns"
+    assert opportunity.title == "A strategic opportunity"
+    assert opportunity.description == "Strategic action derived from patterns"
+    assert opportunity.priority in ["low", "medium", "high"]
     assert opportunity.mission_id == view.mission_id
     assert len(supporting_ids) == 1
     assert supporting_ids[0] == expected_pattern_id, (
@@ -210,7 +213,8 @@ async def test_opportunity_not_found_returns_none():
     view = _make_view(num_patterns=2)
     response = json.dumps({
         "opportunity_found": False,
-        "content": None,
+        "title": None,
+        "description": None,
         "confidence": None,
         "supporting_pattern_indexes": None,
         "reason": "No actionable opportunity identified",

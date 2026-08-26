@@ -13,6 +13,15 @@ from runtime.contracts.knowledge import Pattern
 from runtime.infrastructure.llm.interfaces import LLMProvider
 
 
+class InvalidPatternOutputError(ValueError):
+    """
+    Excepción cognitiva controlada para salida de patrones semánticamente inválida.
+    
+    Se lanza cuando el JSON fue parseado correctamente pero los índices 
+    son inválidos (ej: fuera de rango, o menos de 2).
+    """
+
+
 class PatternDetectionResult(BaseModel):
     """Respuesta esperada del LLM para la detección de patrones."""
     model_config = ConfigDict(populate_by_name=True)
@@ -64,15 +73,15 @@ class PatternDetector:
         if not result.content or not result.supporting_insight_indexes:
             raise ValueError("El LLM indicó pattern_found=True pero no proveyó content o supporting_insight_indexes.")
 
-        # Validaciones de índices
+        # Validaciones de índices (semánticas)
         unique_indexes = list(set(result.supporting_insight_indexes))
         if len(unique_indexes) < 2:
-            raise ValueError(f"Se requieren al menos 2 índices de soporte. El LLM devolvió: {unique_indexes}")
+            raise InvalidPatternOutputError(f"Se requieren al menos 2 índices de soporte. El LLM devolvió: {unique_indexes}")
 
         supporting_ids = []
         for idx in unique_indexes:
             if idx < 0 or idx >= len(intelligence_view.insights):
-                raise ValueError(f"Índice de soporte fuera de rango: {idx}. Total insights: {len(intelligence_view.insights)}")
+                raise InvalidPatternOutputError(f"Índice de soporte fuera de rango: {idx}. Total insights: {len(intelligence_view.insights)}")
             supporting_ids.append(intelligence_view.insights[idx].id)
 
         pattern = Pattern(

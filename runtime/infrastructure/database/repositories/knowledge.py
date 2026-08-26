@@ -245,7 +245,9 @@ class KnowledgeCoreRepository:
         opportunity_model = OpportunityModel(
             id=opportunity.id,
             mission_id=opportunity.mission_id,
-            content=opportunity.content,
+            title=opportunity.title,
+            description=opportunity.description,
+            priority=opportunity.priority,
             confidence=opportunity.confidence,
             created_at=opportunity.created_at,
             patterns=pattern_models
@@ -272,7 +274,9 @@ class KnowledgeCoreRepository:
             Opportunity(
                 id=m.id,
                 mission_id=m.mission_id,
-                content=m.content,
+                title=m.title,
+                description=m.description,
+                priority=m.priority,
                 confidence=m.confidence,
                 created_at=m.created_at,
             )
@@ -329,7 +333,9 @@ class KnowledgeCoreRepository:
                 Opportunity(
                     id=m.id,
                     mission_id=m.mission_id,
-                    content=m.content,
+                    title=m.title,
+                    description=m.description,
+                    priority=m.priority,
                     confidence=m.confidence,
                     created_at=m.created_at,
                 ),

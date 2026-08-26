@@ -118,7 +118,9 @@ class OpportunitySummary(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: UUID
-    content: str
+    title: str
+    description: str
+    priority: str
     confidence: float | None = None
     created_at: datetime
 
@@ -173,7 +175,9 @@ class Opportunity(BaseModel):
 
     id: UUID = Field(default_factory=uuid4)
     mission_id: UUID
-    content: str
+    title: str
+    description: str
+    priority: str
     confidence: float | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

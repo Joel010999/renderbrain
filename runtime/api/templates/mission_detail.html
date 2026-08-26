@@ -35,7 +35,7 @@
         <ul>
             {% for o in intelligence.opportunities %}
             <li style="margin-bottom: 0.5rem;">
-                <strong>Opportunity:</strong> {{ o.content }} <br>
+                <strong>Opportunity:</strong> {{ o.title }} - {{ o.description }} <br>
                 <small style="color: #666;">
                     Confidence: {{ o.confidence }} |
                     Supporting Patterns: {{ o.supporting_pattern_ids | length }} |

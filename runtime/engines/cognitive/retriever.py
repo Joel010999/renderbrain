@@ -63,7 +63,7 @@ class KnowledgeContextRetriever:
 
         opp_summaries = [
             OpportunitySummary(
-                id=o.id, content=o.content, confidence=o.confidence, created_at=o.created_at
+                id=o.id, title=o.title, description=o.description, priority=o.priority, confidence=o.confidence, created_at=o.created_at
             )
             for o in recent_opps
         ]

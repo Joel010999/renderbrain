@@ -61,7 +61,7 @@ class CognitiveEngine:
             
         previous_opportunities_text = "Sin oportunidades detectadas."
         if knowledge_context and knowledge_context.opportunities:
-            lines = [f"- {o.content} (Confianza: {o.confidence})" for o in knowledge_context.opportunities]
+            lines = [f"- {o.title}: {o.description} (Confianza: {o.confidence})" for o in knowledge_context.opportunities]
             previous_opportunities_text = "\n".join(lines)
 
         prompt = f"""

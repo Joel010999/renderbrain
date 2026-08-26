@@ -97,7 +97,9 @@ async def list_opportunities(
     return [
         OpportunityResponse(
             id=o.id,
-            content=o.content,
+            title=o.title,
+            description=o.description,
+            priority=o.priority,
             confidence=o.confidence,
             created_at=o.created_at,
             supporting_pattern_ids=support_ids

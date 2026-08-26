@@ -136,7 +136,7 @@ class OpportunityDetector:
         existing_opps_text = ""
         if intelligence_view.opportunities:
             existing_opps_text = "Oportunidades existentes previamente (NO DUPLICAR CONCEPTUALMENTE):\n" + "\n".join(
-                f"- {o.content}" for o in intelligence_view.opportunities
+                f"- {o.title}: {o.description}" for o in intelligence_view.opportunities
             )
         else:
             existing_opps_text = "No hay oportunidades existentes previas."

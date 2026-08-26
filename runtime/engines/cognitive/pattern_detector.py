@@ -65,7 +65,7 @@ class PatternDetector:
             parsed = json.loads(raw_response)
             result = PatternDetectionResult(**parsed)
         except Exception as e:
-            raise ValueError(f"Respuesta inválida del LLM en PatternDetector: {e}") from e
+            raise InvalidPatternOutputError(f"Respuesta inválida del LLM en PatternDetector: {e}") from e
 
         if not result.pattern_found:
             return None, []

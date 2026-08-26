@@ -278,7 +278,7 @@ class SignalWorker:
                             )
                         except InvalidPatternOutputError as pat_err:
                             logger.warning(
-                                "Invalid pattern output indexes — discarding pattern, preserving valid intelligence",
+                                "Invalid pattern output — discarding pattern, preserving valid intelligence",
                                 extra={
                                     "error": str(pat_err),
                                     "fingerprint": fingerprint,

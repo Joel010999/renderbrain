@@ -165,12 +165,15 @@ class RedisConsumerGroup:
 
         Usa XAUTOCLAIM para reclamar mensajes que llevan al menos `min_idle_ms`
         milisegundos sin ser ACK'd. Útil para reprocesar mensajes que fallaron
-        en una iteración anterior.
+        en una iteración anterior o mensajes de un consumer que murió.
+
+        XAUTOCLAIM opera sobre el grupo completo — reclama entradas de CUALQUIER
+        consumer cuyo idle sea >= min_idle_ms, no solo del consumer actual.
 
         Args:
             count:       Máximo de mensajes a reclamar.
             min_idle_ms: Milisegundos mínimos en PEL para reclamar el mensaje.
-                         0 = reclamar todos los pending de este consumidor.
+                         0 = reclamar todos los pending sin importar idle time.
 
         Returns:
             Lista de (redis_entry_id, EventEnvelope). Lista vacía si no hay pending.
@@ -178,6 +181,17 @@ class RedisConsumerGroup:
         Raises:
             redis.RedisError: Si la operación falla.
         """
+        logger.info(
+            "pending recovery scan",
+            extra={
+                "stream": self._stream,
+                "group": self._group,
+                "consumer": self._consumer,
+                "min_idle_ms": min_idle_ms,
+                "count": count,
+            },
+        )
+
         result = await self._redis.xautoclaim(
             name=self._stream,
             groupname=self._group,
@@ -189,7 +203,42 @@ class RedisConsumerGroup:
         # xautoclaim retorna (next_start_id, entries, deleted_ids)
         # entries tiene el mismo formato que xreadgroup: lista de (id, fields)
         entries = result[1] if result and len(result) > 1 else []
-        return self._parse_entries(entries)
+
+        if entries:
+            logger.info(
+                "pending found",
+                extra={
+                    "stream": self._stream,
+                    "group": self._group,
+                    "consumer": self._consumer,
+                    "pending_count": len(entries),
+                    "entry_ids": [str(e[0]) for e in entries],
+                },
+            )
+        else:
+            logger.info(
+                "no pending messages found",
+                extra={
+                    "stream": self._stream,
+                    "group": self._group,
+                    "consumer": self._consumer,
+                },
+            )
+
+        parsed = self._parse_entries(entries)
+        for entry_id, envelope in parsed:
+            logger.info(
+                "pending reclaimed",
+                extra={
+                    "stream": self._stream,
+                    "group": self._group,
+                    "consumer": self._consumer,
+                    "redis_entry_id": entry_id,
+                    "event_id": str(envelope.event_id),
+                    "event_type": envelope.event_type,
+                },
+            )
+        return parsed
 
     # ------------------------------------------------------------------
     # Confirmación

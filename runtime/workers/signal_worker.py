@@ -466,8 +466,29 @@ class SignalWorker:
         results: list[tuple[CanonicalSignal | None, KnowledgeTransaction | None]] = []
 
         # 1. Pending primero (crash recovery + reproceso de fallos anteriores)
+        logger.info(
+            "scanning for pending messages",
+            extra={"count_requested": count},
+        )
         pending = await self._group.read_pending(count=count, min_idle_ms=0)
+
+        if pending:
+            logger.info(
+                "recovering pending messages",
+                extra={"pending_count": len(pending)},
+            )
+        else:
+            logger.info("no pending messages to recover")
+
         for entry_id, envelope in pending:
+            logger.info(
+                "recovering pending message",
+                extra={
+                    "redis_entry_id": entry_id,
+                    "event_id": str(envelope.event_id),
+                    "event_type": envelope.event_type,
+                },
+            )
             try:
                 result = await self.process_one(entry_id, envelope)
                 results.append(result)

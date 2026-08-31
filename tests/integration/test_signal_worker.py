@@ -1077,3 +1077,249 @@ async def test_infra_error_in_opportunity_causes_rollback_no_xack():
         await _cleanup_processed_signal(async_session, mission_id)
         await redis.delete(_TEST_STREAM)
         await redis.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Test: pending recovery after dead consumer
+#
+# Escenario productivo exacto:
+#   Consumer A lee un mensaje → falla (LLM error) → mensaje queda pending bajo A
+#   Consumer A desaparece (redeploy)
+#   Consumer B arranca con distinto consumer_name
+#   Consumer B llama process_next() → XAUTOCLAIM reclama el pending de A (min_idle=0)
+#   → procesa → XACK → mensaje ya no pending
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_pending_recovery_after_dead_consumer():
+    """
+    Consumer A (diferente nombre) recibe mensaje → falla → pending.
+    Consumer B arranca → process_next() → XAUTOCLAIM reclama el pending de A
+    → lo procesa → XACK.
+
+    Verifica:
+    - XAUTOCLAIM reclama de CUALQUIER consumer del grupo, no solo del propio.
+    - process_next() recupera y procesa el mensaje huérfano.
+    - Después del XACK, el mensaje ya no está pending.
+    - CanonicalSignal persiste en BD (procesamiento exitoso).
+    - Los logs de recovery son visibles: 'pending recovery scan', 'pending found',
+      'pending reclaimed', 'recovering pending message'.
+    """
+    _CONSUMER_A = "dead-consumer-A"
+    _CONSUMER_B = "alive-consumer-B"
+
+    redis = get_redis_client()
+    await redis.delete(_TEST_STREAM)
+
+    mission_id = uuid4()
+    canonical_id = None
+
+    try:
+        # 0. Crear Mission en BD
+        await _create_mission_for_test(async_session, mission_id)
+
+        # 1. Publicar señal
+        await _publish_test_signal(
+            redis, _TEST_STREAM, mission_id,
+            fingerprint_id="recovery-dead-consumer-test",
+        )
+
+        # 2. Consumer A — lee el mensaje (entra en su PEL) pero no procesa
+        cg_a = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_CONSUMER_A,
+        )
+        await cg_a.ensure_group()
+
+        messages = await cg_a.read_new(count=1)
+        assert len(messages) == 1, "Consumer A debe leer 1 mensaje"
+        entry_id, envelope = messages[0]
+
+        # Verificar que el mensaje está pending bajo Consumer A
+        pending_before = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        assert entry_id in [p["message_id"] for p in pending_before], (
+            "El mensaje debe estar pending bajo Consumer A"
+        )
+        owner_before = next(
+            (p["consumer"] for p in pending_before if p["message_id"] == entry_id), None
+        )
+        assert owner_before == _CONSUMER_A, (
+            f"El owner debe ser Consumer A. Got: {owner_before}"
+        )
+
+        # 3. Consumer A "muere" — simplemente no procesa ni ACK el mensaje.
+
+        # 4. Consumer B arranca — usa process_next() con FakeLLM que funciona
+        fake_response = json.dumps({
+            "relevant": True,
+            "evidence": "Evidence from pending recovery test.",
+            "insight": "Insight from pending recovery test.",
+            "confidence": 0.85,
+            "reason": "Pending recovery after dead consumer.",
+        })
+        llm_b = FakeLLMProvider(fake_response)
+        engine_b = CognitiveEngine(llm_b)
+
+        cg_b = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_CONSUMER_B,
+        )
+        worker_b = SignalWorker(
+            consumer_group=cg_b,
+            session_factory=async_session,
+            cognitive_engine=engine_b,
+            llm_provider=llm_b,
+            mission_context=_MISSION_CONTEXT,
+        )
+
+        # 5. Consumer B llama process_next() → debe reclamar pending de A via XAUTOCLAIM
+        results = await worker_b.process_next(count=10)
+
+        assert len(results) == 1, (
+            f"Consumer B debe recuperar 1 mensaje pending de Consumer A. Got: {len(results)}"
+        )
+        canonical, transaction = results[0]
+
+        # 6. Verificar resultado del procesamiento
+        assert canonical is not None, "CanonicalSignal debe estar presente tras recovery"
+        assert transaction is not None, "KnowledgeTransaction debe existir (relevant=True)"
+        canonical_id = canonical.id
+
+        # 7. Verificar persistencia en BD
+        async with async_session() as session:
+            sig_repo = CanonicalSignalRepository(session)
+            recovered = await sig_repo.get_by_id(canonical_id)
+            assert recovered is not None, "CanonicalSignal debe estar en BD después de recovery"
+            assert recovered.mission_id == mission_id
+
+        # 8. Verificar XACK — mensaje ya no pending
+        pending_after = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        pending_ids_after = [p["message_id"] for p in pending_after]
+        assert entry_id not in pending_ids_after, (
+            f"El mensaje {entry_id} debe haber sido XACK'd por Consumer B. "
+            f"Pending restantes: {pending_ids_after}"
+        )
+
+    finally:
+        if canonical_id is not None:
+            await _cleanup_canonical(async_session, canonical_id)
+        await _cleanup_processed_signal(async_session, mission_id)
+        await redis.delete(_TEST_STREAM)
+        await redis.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Test: provider failure keeps pending — mensaje sigue retryable
+#
+# Escenario:
+#   Consumer A lee mensaje → queda pending (sin procesar)
+#   Consumer B intenta recovery → LLM sigue fallando → rollback → NO XACK
+#   → mensaje sigue pending (retryable)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_pending_stays_pending_on_provider_failure():
+    """
+    Consumer A no procesa → mensaje pending.
+    Consumer B intenta recovery → provider sigue fallando → rollback → NO XACK.
+    → Mensaje SIGUE pending (retryable en el siguiente ciclo).
+
+    Verifica:
+    - Si el provider sigue fallando durante recovery, el mensaje NO se pierde.
+    - NO hay XACK → el mensaje permanece en la PEL.
+    - El error se logea pero NO detiene el worker (process_next() absorbe el error).
+    - process_next() retorna lista vacía (ningún resultado exitoso).
+    - CanonicalSignal NO está en BD (rollback efectivo).
+    """
+    _CONSUMER_A = "dead-consumer-A-fail"
+    _CONSUMER_B = "alive-consumer-B-fail"
+
+    redis = get_redis_client()
+    await redis.delete(_TEST_STREAM)
+
+    mission_id = uuid4()
+
+    try:
+        # 0. Crear Mission en BD
+        await _create_mission_for_test(async_session, mission_id)
+
+        # 1. Publicar señal
+        await _publish_test_signal(
+            redis, _TEST_STREAM, mission_id,
+            fingerprint_id="recovery-provider-failure-test",
+        )
+
+        # 2. Consumer A — lee pero no procesa (simula muerte pre-procesamiento)
+        cg_a = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_CONSUMER_A,
+        )
+        await cg_a.ensure_group()
+
+        messages = await cg_a.read_new(count=1)
+        assert len(messages) == 1
+        entry_id, envelope = messages[0]
+
+        # Verificar pending inicial
+        pending_before = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        assert entry_id in [p["message_id"] for p in pending_before]
+
+        # 3. Consumer B — con LLM que siempre falla (provider infra error)
+        llm_b = _ExplodingLLMProvider()  # type: ignore[arg-type]
+        engine_b = CognitiveEngine(llm_b)
+
+        cg_b = RedisConsumerGroup(
+            redis_client=redis,
+            stream=_TEST_STREAM,
+            group=_TEST_GROUP,
+            consumer_name=_CONSUMER_B,
+        )
+        worker_b = SignalWorker(
+            consumer_group=cg_b,
+            session_factory=async_session,
+            cognitive_engine=engine_b,
+            llm_provider=llm_b,
+            mission_context=_MISSION_CONTEXT,
+        )
+
+        # 4. process_next() intenta recovery → LLM falla → rollback → NO XACK
+        #    process_next() absorbe la excepción internamente (logs ERROR pero no re-raise)
+        results = await worker_b.process_next(count=10)
+
+        # Ningún procesamiento exitoso
+        assert len(results) == 0, (
+            f"No debe haber resultados exitosos cuando el provider falla. Got: {len(results)}"
+        )
+
+        # 5. El mensaje SIGUE pending — NO fue XACK'd
+        pending_after = await redis.xpending_range(_TEST_STREAM, _TEST_GROUP, "-", "+", 10)
+        pending_ids_after = [p["message_id"] for p in pending_after]
+        assert entry_id in pending_ids_after, (
+            f"El mensaje {entry_id} debe seguir pending cuando el provider falla. "
+            f"Pending encontrados: {pending_ids_after}"
+        )
+
+        # 6. CanonicalSignal NO debe estar en BD (rollback efectivo)
+        async with async_session() as session:
+            from sqlalchemy import select as _select
+            result = await session.execute(
+                _select(CanonicalSignalModel).where(
+                    CanonicalSignalModel.source_event_id == envelope.event_id
+                )
+            )
+            assert result.scalar_one_or_none() is None, (
+                "CanonicalSignal NO debe estar en BD cuando el provider falla"
+            )
+
+    finally:
+        await _cleanup_processed_signal(async_session, mission_id)
+        await redis.delete(_TEST_STREAM)
+        await redis.aclose()

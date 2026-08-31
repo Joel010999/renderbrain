@@ -6,6 +6,7 @@ Entrypoint del runtime de Worker para procesamiento de Eventos (SignalWorker).
 
 import asyncio
 import logging
+import os
 
 from runtime.engines.cognitive.engine import CognitiveEngine
 from runtime.events.consumer_group import RedisConsumerGroup
@@ -27,13 +28,28 @@ async def main() -> None:
     logger.info("Starting Worker Runtime...")
 
     redis = get_redis_client()
-    
+
+    # Consumer name: use HOSTNAME (unique per container/pod in Docker/Railway).
+    # Falls back to "worker-1" for local development.
+    # XAUTOCLAIM reclaims from any consumer in the group, so if this pod dies
+    # and a new pod starts (even with a different HOSTNAME), it will recover
+    # the pending messages of the dead pod on its first scan.
+    consumer_name = os.environ.get("HOSTNAME", "worker-1")
+    logger.info(
+        "Worker consumer identity",
+        extra={
+            "consumer_name": consumer_name,
+            "stream": settings.EVENT_BUS_STREAM,
+            "group": settings.WORKER_GROUP_NAME,
+        },
+    )
+
     # 1. Configurar Consumer Group
     cg = RedisConsumerGroup(
         redis_client=redis,
         stream=settings.EVENT_BUS_STREAM,
         group=settings.WORKER_GROUP_NAME,
-        consumer_name="worker-1",  # Podría venir de vars de entorno (ej. HOSTNAME)
+        consumer_name=consumer_name,
     )
     await cg.ensure_group()
     

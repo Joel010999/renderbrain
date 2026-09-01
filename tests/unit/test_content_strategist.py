@@ -225,3 +225,24 @@ async def test_provider_timeout_propagates(opportunity):
     with pytest.raises(RuntimeError) as exc:
         await strategist.generate(opportunity, "Context")
     assert "Network timeout" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_phase_b_prompt_isolation(opportunity):
+    """Test 15: Phase B prompt must NOT contain Opportunity title or description."""
+    opportunity.title = "SECRET_TITLE_DO_NOT_LEAK"
+    opportunity.description = "SECRET_DESC_DO_NOT_LEAK"
+    
+    llm = FakeLLMProvider(build_valid_json_response())
+    strategist = ContentStrategist(llm)
+    
+    await strategist.generate(opportunity, "Contexto de misión")
+    
+    # Phase B prompt is the second call (index 1) in FakeLLMProvider
+    phase_b_prompt = llm.last_prompts[1]
+    
+    assert "Fase B: Generación" in phase_b_prompt
+    assert opportunity.title not in phase_b_prompt
+    assert opportunity.description not in phase_b_prompt
+    assert "SECRET_TITLE_DO_NOT_LEAK" not in phase_b_prompt
+    assert "SECRET_DESC_DO_NOT_LEAK" not in phase_b_prompt

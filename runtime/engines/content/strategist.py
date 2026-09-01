@@ -72,8 +72,19 @@ class MisalignedBrandBriefError(ValueError):
     """
 
 
+class TransferableInsightResult(BaseModel):
+    """
+    Fase A (Abstracción): Resultado estructurado.
+    NO contiene el contenido final, solo el insight de negocio y su alineamiento.
+    """
+    transferable_insight: str
+    brand_service_alignment: BrandServiceAlignment
+    business_pain: str
+    rationale: str
+
+
 # ---------------------------------------------------------------------------
-# Modelo privado para validar la respuesta JSON del LLM
+# Modelo privado para validar la respuesta JSON del LLM (Fase B)
 # ---------------------------------------------------------------------------
 
 
@@ -86,8 +97,6 @@ class _LLMContentBriefRaw(BaseModel):
     objective: ContentObjective
     target_audience: str
     angle: ContentAngle
-    transferable_insight: str
-    brand_service_alignment: BrandServiceAlignment
     core_message: str
     hook: str
     sections: list[dict]  # Validados individualmente abajo
@@ -123,23 +132,8 @@ class ContentStrategist:
         brand_context: dict[str, str | list[str]] | None = None,
     ) -> ContentBrief:
         """
-        Genera un ContentBrief validado a partir de una Opportunity.
-
-        Args:
-            opportunity:       Opportunity priorizada del Agent 2.
-            mission_context:   Contexto de misión inyectado (nombre, scope, target).
-            observation_scope: Propósito por el cual la fuente fue observada.
-            brand_context:     Contexto de la marca para la cual se genera el contenido.
-
-        Returns:
-            ContentBrief validado y listo para persistencia.
-
-        Raises:
-            InvalidContentBriefOutputError: JSON roto, schema inválido, campos faltantes.
-            LLMProviderError / RuntimeError: Fallos de infraestructura del provider.
+        Genera un ContentBrief validado a partir de una Opportunity en 2 Fases (Abstraction y Generation).
         """
-        prompt = self._build_prompt(opportunity, mission_context, observation_scope, brand_context)
-
         logger.info(
             "Content strategy generation started",
             extra={
@@ -149,18 +143,16 @@ class ContentStrategist:
             },
         )
 
-        try:
-            raw_response = await asyncio.wait_for(self._llm.complete(prompt), timeout=60.0)
-        except asyncio.TimeoutError as e:
-            logger.error("Timeout esperando respuesta del LLM (Content Strategist)", extra={"opportunity_id": str(opportunity.id)})
-            raise RuntimeError("El LLMProvider excedió el tiempo límite (60s).") from e
+        # FASE A: Abstracción
+        abstraction = await self._generate_abstraction(
+            opportunity, mission_context, observation_scope, brand_context
+        )
 
-        if not raw_response or not raw_response.strip():
-            raise InvalidContentBriefOutputError(
-                "El LLM devolvió una respuesta vacía al generar el ContentBrief."
-            )
+        # FASE B: Generación
+        raw_response = await self._generate_content(abstraction, brand_context, mission_context)
 
-        brief = self._parse_and_validate(raw_response, opportunity)
+        # Parseo y Validación
+        brief = self._parse_and_validate(raw_response, opportunity, abstraction)
         
         self._deterministic_validation(brief, opportunity)
         await self._validate_alignment(brief, opportunity, brand_context)
@@ -269,6 +261,7 @@ Answer ONLY with a valid JSON containing:
         self,
         raw_response: str,
         opportunity: Opportunity,
+        abstraction: TransferableInsightResult,
     ) -> ContentBrief:
         """
         Parsea y valida la respuesta JSON del LLM.
@@ -321,8 +314,8 @@ Answer ONLY with a valid JSON containing:
                 objective=raw.objective,
                 target_audience=raw.target_audience,
                 angle=raw.angle,
-                transferable_insight=raw.transferable_insight,
-                brand_service_alignment=raw.brand_service_alignment,
+                transferable_insight=abstraction.transferable_insight,
+                brand_service_alignment=abstraction.brand_service_alignment,
                 core_message=raw.core_message,
                 hook=raw.hook,
                 sections=sections,
@@ -359,22 +352,85 @@ Answer ONLY with a valid JSON containing:
 
         return sections
 
-    def _build_prompt(
+    async def _generate_abstraction(
         self,
         opportunity: Opportunity,
         mission_context: str,
         observation_scope: str,
         brand_context: dict[str, str | list[str]] | None,
+    ) -> TransferableInsightResult:
+        """
+        FASE A: Extrae el Transferable Insight sin generar contenido.
+        """
+        alignments = ", ".join(a.value for a in BrandServiceAlignment)
+        brand_info = ""
+        if brand_context:
+            services = ", ".join(brand_context.get("core_services", []))
+            brand_info = f"""
+Brand Context:
+Name: {brand_context.get('brand_name', 'la marca')}
+Description: {brand_context.get('brand_description', '')}
+Services: {services}
+"""
+
+        prompt = f"""Eres RenderBrain Content Strategist — Fase A: Abstracción.
+Tu tarea es analizar una Opportunity extraída de una fuente externa y derivar un insight de negocio transferible.
+
+{brand_info}
+
+Contexto de la Misión (La FUENTE que observaste para aprender):
+{mission_context}
+Propósito de la observación: {observation_scope}
+
+Opportunity a analizar:
+- Título: {opportunity.title}
+- Descripción: {opportunity.description}
+
+Instrucciones:
+1. Extrae una lección de negocios, principio o dolor abstracto desde la Opportunity que pueda aplicarse a cualquier otra industria. NO hables del producto/servicio original de la fuente. (Ej: "Creación de coworking" -> Dolor: "Falta de seguimiento de contactos genera pérdida de ventas").
+2. Selecciona el servicio de RenderByte ({alignments}) que mejor resuelve este dolor abstracto.
+
+Responde ÚNICAMENTE con un JSON válido:
+{{
+    "transferable_insight": "<insight abstracto>",
+    "brand_service_alignment": "<uno de: {alignments}>",
+    "business_pain": "<dolor de negocio que resolvemos>",
+    "rationale": "<breve justificación interna>"
+}}
+"""
+        try:
+            val_response = await asyncio.wait_for(self._llm.complete(prompt), timeout=30.0)
+            clean = val_response.strip()
+            if clean.startswith("```json"):
+                clean = clean[7:]
+            if clean.startswith("```"):
+                clean = clean[3:]
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+            val_data = json.loads(clean)
+            
+            return TransferableInsightResult(**val_data)
+        except json.JSONDecodeError as e:
+            raise InvalidContentBriefOutputError("Fase A devolvió JSON inválido") from e
+        except ValidationError as e:
+            raise InvalidContentBriefOutputError("Fase A no cumple el schema TransferableInsightResult") from e
+        except asyncio.TimeoutError as e:
+            raise RuntimeError("Timeout esperando respuesta del LLM (Fase A).") from e
+
+    async def _generate_content(
+        self,
+        abstraction: TransferableInsightResult,
+        brand_context: dict[str, str | list[str]] | None,
+        mission_context: str,
     ) -> str:
         """
-        Construye el prompt para la generación del ContentBrief.
-
-        El LLM debe responder con un JSON estricto que cumpla el schema.
+        FASE B: Genera el ContentBrief usando SOLO el Transferable Insight.
+        El LLM NUNCA recibe el título ni la descripción de la Opportunity original.
         """
         formats = ", ".join(f.value for f in ContentFormat)
         objectives = ", ".join(o.value for o in ContentObjective)
         angles = ", ".join(a.value for a in ContentAngle)
-        alignments = ", ".join(a.value for a in BrandServiceAlignment)
 
         brand_info = ""
         if brand_context:
@@ -388,60 +444,34 @@ Audiencia: {brand_context.get('target_audience', '')}
 Objetivo de contenido: {brand_context.get('content_goal', '')}
 """
 
-        return f"""Eres RenderBrain Content Strategist — Agent 3.
-Tu tarea es generar una propuesta de contenido concreta y accionable a partir de una Opportunity estratégica detectada.
+        prompt = f"""Eres RenderBrain Content Strategist — Fase B: Generación.
+Tu tarea es generar un ContentBrief accionable a partir de un insight estratégico.
 
 {brand_info}
 
-Contexto de la Misión (La FUENTE que observaste para aprender):
-{mission_context}
-Propósito de la observación (observation_scope): {observation_scope}
+INSIGHT ESTRATÉGICO A COMUNICAR:
+- Transferable Insight: {abstraction.transferable_insight}
+- Business Pain a resolver: {abstraction.business_pain}
+- Servicio de tu Marca a promocionar: {abstraction.brand_service_alignment.value}
 
-Opportunity a trabajar (Aprendizaje extraído de la fuente):
-- Título: {opportunity.title}
-- Descripción: {opportunity.description}
-- Prioridad: {opportunity.priority}
+Contexto mínimo de la misión original: {mission_context}
 
 Instrucciones:
-ESTRUCTURA MENTAL ESTRICTA EN 3 PASOS:
-
-STEP 1: DERIVE TRANSFERABLE INSIGHT
-- Extrae una lección de negocios, principio o problema abstracto desde la Opportunity que pueda aplicarse a cualquier otra industria. NO hables del producto de la fuente.
-- Ej: "Creación de coworking" -> "Generar contactos no genera ventas si no hay seguimiento".
-
-STEP 2: CHOOSE BRAND SERVICE
-- Selecciona el servicio de RenderByte que resuelve el insight de Step 1: {alignments}.
-
-STEP 3: WRITE FINAL CONTENT ONLY FROM STEP 1 + STEP 2
-- El contenido final debe versar 100% sobre el transferable_insight y el brand_service_alignment seleccionado.
-- La fuente observada es SÓLO evidencia/contexto, nunca el producto vendido.
+- El contenido final debe versar 100% sobre el Transferable Insight y el dolor de negocio (Business Pain), ofreciendo el Servicio de tu Marca como solución.
+- NO menciones ningún producto de terceros, eventos o comunidades de donde pudo provenir este insight. Tú eres {brand_context.get('brand_name', 'la marca') if brand_context else 'la marca'} y vendes tus propios servicios.
+- Promociona explícitamente el servicio seleccionado: {abstraction.brand_service_alignment.value}.
 
 Campos a rellenar:
 1. content_format: {formats}
 2. objective: {objectives}
 3. target_audience: (descripción corta, 1-2 oraciones).
 4. angle: {angles}
-5. transferable_insight: El insight abstracto (Step 1).
-6. brand_service_alignment: El servicio (Step 2).
-7. core_message: la idea fundamental en 1 oración.
-8. hook: primera línea de apertura, corta, impactante, publicable directamente.
-9. sections: Mínimo 1, máximo 5. (Body/script ordenado).
-10. cta: coherente con el objetivo y el SERVICIO SELECCIONADO.
-11. visual_direction: instrucción conceptual visual.
-12. source_reasoning: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
-
-Reglas Críticas:
-- You are creating content FOR {brand_context.get('brand_name', 'your brand') if brand_context else 'the brand'}.
-- The observed account/mission is a SOURCE of intelligence, NOT the brand.
-- NEVER claim products, services, events, programs, or offers from the observed source as belonging to your brand.
-- Transform the insight/opportunity into content relevant to YOUR brand's services and audience.
-- Agent 3 NO debe convertir directamente Opportunity -> Content. Debe hacer: SOURCE OPPORTUNITY -> EXTRACT TRANSFERABLE INSIGHT -> MAP TO RENDERBYTE SERVICE/PAIN -> GENERATE CONTENT.
-- If the observed opportunity is unrelated to RenderByte directly, extract a transferable business lesson and connect it to a real RenderByte pain/service.
-- Do NOT promote the observed opportunity itself.
-- The observed opportunity MUST NOT remain the main topic of the final content if it is not a RenderByte service.
-- The final content must be ABOUT the transferable business lesson and the selected RenderByte service.
-- Do not merely mention RenderByte inside content that still promotes the observed source.
-- The selected brand_service_alignment must be reflected in the hook, core message, body and CTA.
+5. core_message: la idea fundamental en 1 oración.
+6. hook: primera línea de apertura, corta, impactante, publicable directamente.
+7. sections: Mínimo 1, máximo 5. (Body/script ordenado).
+8. cta: coherente con el objetivo y el SERVICIO SELECCIONADO.
+9. visual_direction: instrucción conceptual visual.
+10. source_reasoning: por qué esta pieza es la respuesta correcta a este insight.
 
 Responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
 {{
@@ -449,8 +479,6 @@ Responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
     "objective": "<uno de: {objectives}>",
     "target_audience": "<descripción corta de la audiencia>",
     "angle": "<uno de: {angles}>",
-    "transferable_insight": "<insight abstracto step 1>",
-    "brand_service_alignment": "<uno de: {alignments}>",
     "core_message": "<mensaje central en 1 oración>",
     "hook": "<primera línea de apertura impactante>",
     "sections": [
@@ -462,3 +490,10 @@ Responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
     "source_reasoning": "<justificación del porqué de esta pieza>"
 }}
 """
+        try:
+            raw_response = await asyncio.wait_for(self._llm.complete(prompt), timeout=60.0)
+            if not raw_response or not raw_response.strip():
+                raise InvalidContentBriefOutputError("El LLM devolvió una respuesta vacía en Fase B.")
+            return raw_response
+        except asyncio.TimeoutError as e:
+            raise RuntimeError("Timeout esperando respuesta del LLM (Fase B).") from e

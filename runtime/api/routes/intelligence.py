@@ -106,3 +106,25 @@ async def list_opportunities(
         )
         for o, support_ids in models
     ]
+
+
+@router.post("/opportunities/{opportunity_id}/retry-content-generation", status_code=200)
+async def retry_opportunity_content_generation(
+    mission_id: UUID,
+    opportunity_id: UUID,
+    mission_repo: MissionRepository = Depends(get_mission_repo),
+    knowledge_repo: KnowledgeCoreRepository = Depends(get_knowledge_repo)
+):
+    """
+    Resetea el contador de intentos de generación de contenido (content_generation_attempts)
+    a 0 para permitir un reintento manual (Agent 3).
+    """
+    await _ensure_mission_exists(mission_id, mission_repo)
+    
+    # Verify opportunity exists and belongs to mission
+    opportunity = await knowledge_repo.get_opportunity_by_id(opportunity_id)
+    if not opportunity or opportunity.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="Opportunity not found")
+        
+    await knowledge_repo.reset_content_generation_attempts(opportunity_id)
+    return {"status": "success", "message": "Content generation attempts reset to 0"}

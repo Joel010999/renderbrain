@@ -22,6 +22,7 @@ Separación de responsabilidades:
 
 import json
 import logging
+import asyncio
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -136,7 +137,11 @@ class ContentStrategist:
             },
         )
 
-        raw_response = await self._llm.complete(prompt)
+        try:
+            raw_response = await asyncio.wait_for(self._llm.complete(prompt), timeout=60.0)
+        except asyncio.TimeoutError as e:
+            logger.error("Timeout esperando respuesta del LLM (Content Strategist)", extra={"opportunity_id": str(opportunity.id)})
+            raise RuntimeError("El LLMProvider excedió el tiempo límite (60s).") from e
 
         if not raw_response or not raw_response.strip():
             raise InvalidContentBriefOutputError(

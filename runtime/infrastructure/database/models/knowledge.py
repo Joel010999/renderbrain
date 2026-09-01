@@ -137,6 +137,7 @@ class OpportunityModel(Base):
     priority: Mapped[str] = mapped_column(String(50), nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_generation_attempts: Mapped[int] = mapped_column(default=0, server_default='0', nullable=False)
 
     # Relaciones
     patterns: Mapped[list["PatternModel"]] = relationship(

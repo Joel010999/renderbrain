@@ -50,6 +50,7 @@ class ContentBriefModel(Base):
     objective: Mapped[str] = mapped_column(String(50), nullable=False)
     target_audience: Mapped[str] = mapped_column(Text, nullable=False)
     angle: Mapped[str] = mapped_column(String(50), nullable=False)
+    transferable_insight: Mapped[str] = mapped_column(Text, nullable=False, server_default='N/A')
     brand_service_alignment: Mapped[str | None] = mapped_column(String(50), nullable=True)
     core_message: Mapped[str] = mapped_column(Text, nullable=False)
     hook: Mapped[str] = mapped_column(Text, nullable=False)

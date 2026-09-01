@@ -177,12 +177,11 @@ class Opportunity(BaseModel):
     mission_id: UUID
     title: str
     description: str
-    priority: str
+    priority: str = Field(default="low")
     confidence: float | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    content_generation_attempts: int = Field(default=0)
 
     @field_serializer("created_at")
     def serialize_datetime(self, value: datetime) -> str:
         return value.isoformat()
-
-

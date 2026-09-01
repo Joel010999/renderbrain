@@ -71,7 +71,10 @@ async def _process_missing_briefs(
         stmt = (
             select(OpportunityModel)
             .outerjoin(ContentBriefModel, OpportunityModel.id == ContentBriefModel.opportunity_id)
-            .where(ContentBriefModel.id == None)  # noqa: E711
+            .where(
+                (ContentBriefModel.id == None) &  # noqa: E711
+                (OpportunityModel.content_generation_attempts < 3)
+            )
             .order_by(OpportunityModel.created_at.desc())
             .limit(10)  # Procesar en batchs pequeños para no bloquear
         )
@@ -99,6 +102,7 @@ async def _process_missing_briefs(
                 description=opp_model.description,
                 priority=opp_model.priority,
                 created_at=opp_model.created_at,
+                content_generation_attempts=opp_model.content_generation_attempts,
             )
 
             # run_content_strategy_flow gestiona su propia transacción aislada

@@ -98,6 +98,19 @@ async def run_content_strategy_flow(
                 "error": str(e),
             },
         )
+        try:
+            async with session_factory() as session:
+                from sqlalchemy import update
+                from runtime.infrastructure.database.models.knowledge import OpportunityModel
+                stmt = (
+                    update(OpportunityModel)
+                    .where(OpportunityModel.id == opportunity.id)
+                    .values(content_generation_attempts=OpportunityModel.content_generation_attempts + 1)
+                )
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as update_err:
+            logger.error("Failed to increment content_generation_attempts", exc_info=update_err)
         return None
     except Exception as e:
         logger.error(
@@ -127,6 +140,19 @@ async def run_content_strategy_flow(
                     "objective": brief.objective.value,
                 },
             )
+            try:
+                async with session_factory() as update_session:
+                    from sqlalchemy import update
+                    from runtime.infrastructure.database.models.knowledge import OpportunityModel
+                    stmt = (
+                        update(OpportunityModel)
+                        .where(OpportunityModel.id == opportunity.id)
+                        .values(content_generation_attempts=0)
+                    )
+                    await update_session.execute(stmt)
+                    await update_session.commit()
+            except Exception as update_err:
+                logger.error("Failed to reset content_generation_attempts", exc_info=update_err)
         else:
             logger.info(
                 "Agent 3: content brief already exists for this opportunity — skipping",

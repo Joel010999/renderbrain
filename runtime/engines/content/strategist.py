@@ -86,6 +86,7 @@ class _LLMContentBriefRaw(BaseModel):
     objective: ContentObjective
     target_audience: str
     angle: ContentAngle
+    transferable_insight: str
     brand_service_alignment: BrandServiceAlignment
     core_message: str
     hook: str
@@ -161,6 +162,7 @@ class ContentStrategist:
 
         brief = self._parse_and_validate(raw_response, opportunity)
         
+        self._deterministic_validation(brief, opportunity)
         await self._validate_alignment(brief, opportunity, brand_context)
 
         logger.info(
@@ -174,6 +176,29 @@ class ContentStrategist:
         )
 
         return brief
+
+    def _deterministic_validation(self, brief: ContentBrief, opportunity: Opportunity) -> None:
+        """
+        Cheap deterministic check before calling the QA LLM.
+        Prevents wasting LLM calls on obvious failures.
+        """
+        if not brief.transferable_insight or not brief.transferable_insight.strip():
+            raise MisalignedBrandBriefError("El transferable_insight está vacío.")
+        
+        # Simple heuristic: if the alignment is NOT direct fit (e.g., coworking -> crm)
+        # we check if the hook/cta prominently feature the opportunity title words.
+        # This is basic and not a strict keyword block, but catches egregious direct copies.
+        opp_words = [w.lower() for w in opportunity.title.split() if len(w) > 4]
+        
+        if brief.brand_service_alignment.value not in ["stock_sales_collections", "ecommerce"]:
+            # Hardcoded heuristic for the coworking case specifically to stop egregious loop
+            if "coworking" in opportunity.title.lower():
+                text_to_check = f"{brief.hook.lower()} {brief.cta.lower()} {brief.core_message.lower()}"
+                if "coworking" in text_to_check and brief.brand_service_alignment.value != "coworking":
+                    raise MisalignedBrandBriefError(
+                        "Validación determinista falló: el brief sigue mencionando 'coworking' fuertemente "
+                        "como oferta principal a pesar de estar alineado a un servicio distinto."
+                    )
 
     async def _validate_alignment(
         self,
@@ -296,6 +321,7 @@ Answer ONLY with a valid JSON containing:
                 objective=raw.objective,
                 target_audience=raw.target_audience,
                 angle=raw.angle,
+                transferable_insight=raw.transferable_insight,
                 brand_service_alignment=raw.brand_service_alignment,
                 core_message=raw.core_message,
                 hook=raw.hook,
@@ -377,20 +403,32 @@ Opportunity a trabajar (Aprendizaje extraído de la fuente):
 - Prioridad: {opportunity.priority}
 
 Instrucciones:
-1. Decide el FORMATO más adecuado para comunicar esta oportunidad: {formats}
-2. Define el OBJETIVO comunicacional: {objectives}
-3. Identifica la AUDIENCIA objetivo (descripción corta, 1-2 oraciones).
-4. Elige el ÁNGULO narrativo: {angles}
-5. Mapea un TRANSFERABLE INSIGHT a un SERVICIO DE RenderByte (brand_service_alignment): {alignments}. (The final content MUST be relevant to at least one real RenderByte service).
-6. Redacta el MENSAJE CENTRAL (core_message): la idea fundamental en 1 oración.
-7. Escribe el HOOK: primera línea de apertura, corta, impactante, publicable directamente.
-8. Desarrolla el BODY/SCRIPT como secciones ordenadas (sections). Mínimo 1 sección, máximo 5.
-   - Para reel: guión por bloques narrativos.
-   - Para carousel: un slide por sección.
-   - Para static_post: una sola sección con el cuerpo completo.
-9. Define el CTA coherente con el objetivo.
-10. Da una DIRECCIÓN VISUAL conceptual (instrucción para el diseñador/productor, NO colores ni diseño final).
-11. Redacta el SOURCE_REASONING: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
+ESTRUCTURA MENTAL ESTRICTA EN 3 PASOS:
+
+STEP 1: DERIVE TRANSFERABLE INSIGHT
+- Extrae una lección de negocios, principio o problema abstracto desde la Opportunity que pueda aplicarse a cualquier otra industria. NO hables del producto de la fuente.
+- Ej: "Creación de coworking" -> "Generar contactos no genera ventas si no hay seguimiento".
+
+STEP 2: CHOOSE BRAND SERVICE
+- Selecciona el servicio de RenderByte que resuelve el insight de Step 1: {alignments}.
+
+STEP 3: WRITE FINAL CONTENT ONLY FROM STEP 1 + STEP 2
+- El contenido final debe versar 100% sobre el transferable_insight y el brand_service_alignment seleccionado.
+- La fuente observada es SÓLO evidencia/contexto, nunca el producto vendido.
+
+Campos a rellenar:
+1. content_format: {formats}
+2. objective: {objectives}
+3. target_audience: (descripción corta, 1-2 oraciones).
+4. angle: {angles}
+5. transferable_insight: El insight abstracto (Step 1).
+6. brand_service_alignment: El servicio (Step 2).
+7. core_message: la idea fundamental en 1 oración.
+8. hook: primera línea de apertura, corta, impactante, publicable directamente.
+9. sections: Mínimo 1, máximo 5. (Body/script ordenado).
+10. cta: coherente con el objetivo y el SERVICIO SELECCIONADO.
+11. visual_direction: instrucción conceptual visual.
+12. source_reasoning: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
 
 Reglas Críticas:
 - You are creating content FOR {brand_context.get('brand_name', 'your brand') if brand_context else 'the brand'}.
@@ -404,18 +442,14 @@ Reglas Críticas:
 - The final content must be ABOUT the transferable business lesson and the selected RenderByte service.
 - Do not merely mention RenderByte inside content that still promotes the observed source.
 - The selected brand_service_alignment must be reflected in the hook, core message, body and CTA.
-- NO inventar información de marca que no esté en tu contexto.
-- NO buscar en internet ni referenciar datos externos.
-- El hook debe ser publicable tal cual (no una descripción de un hook).
-- sections[].content debe ser el texto real del guión/slide, no una descripción.
-- source_reasoning debe ser un párrafo corto de justificación, no una lista de pasos.
 
-Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdown ni bloques de código):
+Responde ÚNICAMENTE con un JSON válido con esta estructura exacta:
 {{
     "content_format": "<uno de: {formats}>",
     "objective": "<uno de: {objectives}>",
     "target_audience": "<descripción corta de la audiencia>",
     "angle": "<uno de: {angles}>",
+    "transferable_insight": "<insight abstracto step 1>",
     "brand_service_alignment": "<uno de: {alignments}>",
     "core_message": "<mensaje central en 1 oración>",
     "hook": "<primera línea de apertura impactante>",

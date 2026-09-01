@@ -33,6 +33,7 @@ def build_valid_json_response() -> str:
         "objective": "education",
         "target_audience": "Emprendedores",
         "angle": "pain",
+        "transferable_insight": "El control de stock manual genera pérdida de ventas.",
         "brand_service_alignment": "crm",
         "core_message": "El control de stock manual mata tu negocio.",
         "hook": "¿Sigues usando Excel para tu inventario? Estás perdiendo dinero.",
@@ -44,6 +45,61 @@ def build_valid_json_response() -> str:
         "visual_direction": "Video dinámico, cortes rápidos.",
         "source_reasoning": "Resuelve la Opportunity X."
     })
+
+
+@pytest.mark.asyncio
+async def test_coworking_valid_crm(opportunity):
+    """Test A: coworking -> CRM -> QA passes."""
+    opportunity.title = "Creación de coworking"
+    data = json.loads(build_valid_json_response())
+    data["transferable_insight"] = "Sin seguimiento, el networking se pierde."
+    data["brand_service_alignment"] = "crm"
+    data["hook"] = "¿Vas a eventos pero tus contactos mueren en Excel?"
+    data["core_message"] = "Centraliza tus contactos con un CRM."
+    data["cta"] = "Comenta CRM para instalar tu sistema"
+    
+    llm = FakeLLMProvider(json.dumps(data))
+    strategist = ContentStrategist(llm)
+    
+    brief = await strategist.generate(opportunity, "Context")
+    assert brief.brand_service_alignment.value == "crm"
+    assert brief.transferable_insight == "Sin seguimiento, el networking se pierde."
+
+
+@pytest.mark.asyncio
+async def test_coworking_invalid_still_selling_coworking(opportunity):
+    """Test B: coworking -> still selling coworking -> rejected deterministically."""
+    opportunity.title = "Creación de un espacio de coworking para emprendedores"
+    data = json.loads(build_valid_json_response())
+    data["brand_service_alignment"] = "crm"
+    data["hook"] = "Ven a nuestro nuevo coworking en Palermo"
+    data["cta"] = "Reserva tu espacio de coworking hoy"
+    data["transferable_insight"] = "El coworking mejora tu vida."
+    
+    llm = FakeLLMProvider(json.dumps(data))
+    strategist = ContentStrategist(llm)
+    
+    from runtime.engines.content.strategist import MisalignedBrandBriefError
+    with pytest.raises(MisalignedBrandBriefError) as exc:
+        await strategist.generate(opportunity, "Context")
+    assert "Validación determinista falló" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_stock_direct_fit(opportunity):
+    """Test C: stock -> stock alignment -> allowed."""
+    opportunity.title = "Mejores prácticas para el control de stock"
+    data = json.loads(build_valid_json_response())
+    data["brand_service_alignment"] = "stock_sales_collections"
+    data["hook"] = "¿Tu stock está desordenado?"
+    data["cta"] = "Organiza tu stock"
+    data["transferable_insight"] = "El stock ordenado es vital."
+    
+    llm = FakeLLMProvider(json.dumps(data))
+    strategist = ContentStrategist(llm)
+    
+    brief = await strategist.generate(opportunity, "Context")
+    assert brief.brand_service_alignment.value == "stock_sales_collections"
 
 
 @pytest.mark.asyncio

@@ -123,6 +123,7 @@ class ContentBrief(BaseModel):
     objective: ContentObjective
     target_audience: str = Field(min_length=1)
     angle: ContentAngle
+    transferable_insight: str = Field(min_length=1, description="Transferable insight abstracted from the source opportunity.")
     brand_service_alignment: BrandServiceAlignment
 
     core_message: str = Field(min_length=1)

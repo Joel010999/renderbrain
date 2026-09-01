@@ -64,6 +64,7 @@ from runtime.infrastructure.database.repositories.processed_signal import (
 )
 from runtime.orchestration.cognitive_flow import run_cognitive_flow
 from runtime.orchestration.signal_flow import run_signal_flow
+from runtime.orchestration.content_strategy_flow import run_content_strategy_flow
 from runtime.shared.logger import get_logger
 from runtime.workers.fingerprint import FingerprintError, compute_fingerprint
 
@@ -350,7 +351,7 @@ class SignalWorker:
 
                     # ----------------------------------------------------------
                     # PASO FINAL: Commit Atómico Conjunto
-                    # Todo lo que se hizo (CanonicalSignal, Evidence, Insight, 
+                    # Todo lo que se hizo (CanonicalSignal, Evidence, Insight,
                     # ProcessedSignal, Pattern, y Opportunity) queda durable al unísono.
                     # ----------------------------------------------------------
                     await session.commit()
@@ -371,6 +372,24 @@ class SignalWorker:
                                 "transaction_id": str(transaction.id),
                                 "fingerprint": fingerprint,
                             },
+                        )
+
+                    # ----------------------------------------------------------
+                    # Agent 3 Trigger — Content Strategy Flow
+                    #
+                    # CRÍTICO: El session.commit() del Agent 2 ya ocurrió arriba.
+                    # La Opportunity está durable en BD antes de llamar Agent 3.
+                    #
+                    # run_content_strategy_flow() abre su PROPIA sesión aislada.
+                    # Todos los errores del Agent 3 son capturados internamente.
+                    # El XACK y el pipeline del Agent 2 son inmunes a fallos del Agent 3.
+                    # ----------------------------------------------------------
+                    if opportunity is not None:
+                        await run_content_strategy_flow(
+                            opportunity=opportunity,
+                            mission_context=self._mission_context,
+                            llm_provider=self._llm_provider,
+                            session_factory=self._session_factory,
                         )
 
 

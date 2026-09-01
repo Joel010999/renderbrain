@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from runtime.contracts.knowledge import InsightSummary, PatternSummary, OpportunitySummary, MissionIntelligenceView
+from runtime.contracts.content_brief import ContentBrief
 from runtime.contracts.mission import (
     Mission,
     OBSERVATION_SCOPES,
@@ -196,3 +197,75 @@ class MissionUpdateRequest(BaseModel):
                     f"El campo 'target' no es un perfil de Instagram válido: {exc}"
                 ) from exc
         return self
+
+
+# ---------------------------------------------------------------------------
+# Agent 3 — ContentBrief API response contracts
+# ---------------------------------------------------------------------------
+
+
+class ContentBriefSectionResponse(BaseModel):
+    """Sección individual del brief para la respuesta de la API."""
+
+    order: int
+    title: str | None = None
+    content: str
+
+
+class ContentBriefResponse(BaseModel):
+    """
+    Respuesta de API para un ContentBrief.
+
+    Incluye todos los campos para trazabilidad completa:
+        opportunity_id → Opportunity (Agent 2) → Patterns → Insights → Signals
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: UUID
+    mission_id: UUID
+    opportunity_id: UUID
+    content_format: str
+    objective: str
+    target_audience: str
+    angle: str
+    core_message: str
+    hook: str
+    sections: list[ContentBriefSectionResponse]
+    cta: str
+    visual_direction: str
+    source_reasoning: str
+    status: str
+    created_at: datetime
+
+    @field_serializer("created_at")
+    def serialize_datetime(self, value: datetime) -> str:
+        return value.isoformat()
+
+    @classmethod
+    def from_brief(cls, brief: ContentBrief) -> "ContentBriefResponse":
+        """Construye una ContentBriefResponse a partir de un ContentBrief de dominio."""
+        return cls(
+            id=brief.id,
+            mission_id=brief.mission_id,
+            opportunity_id=brief.opportunity_id,
+            content_format=brief.content_format.value,
+            objective=brief.objective.value,
+            target_audience=brief.target_audience,
+            angle=brief.angle.value,
+            core_message=brief.core_message,
+            hook=brief.hook,
+            sections=[
+                ContentBriefSectionResponse(
+                    order=sec.order,
+                    title=sec.title,
+                    content=sec.content,
+                )
+                for sec in brief.sections
+            ],
+            cta=brief.cta,
+            visual_direction=brief.visual_direction,
+            source_reasoning=brief.source_reasoning,
+            status=brief.status,
+            created_at=brief.created_at,
+        )

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from runtime.infrastructure.database.session import get_session
 from runtime.infrastructure.database.repositories.mission import MissionRepository
 from runtime.infrastructure.database.repositories.knowledge import KnowledgeCoreRepository
+from runtime.infrastructure.database.repositories.content_brief import ContentBriefRepository
 from runtime.engines.cognitive.retriever import KnowledgeContextRetriever
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
@@ -24,3 +25,7 @@ async def get_knowledge_repo(session: AsyncSession = Depends(get_db_session)) ->
 async def get_retriever(repo: KnowledgeCoreRepository = Depends(get_knowledge_repo)) -> KnowledgeContextRetriever:
     """Provee el retriever determinista de la vista de inteligencia."""
     return KnowledgeContextRetriever(repo)
+
+async def get_content_brief_repo(session: AsyncSession = Depends(get_db_session)) -> ContentBriefRepository:
+    """Provee el repositorio de ContentBriefs (Agent 3)."""
+    return ContentBriefRepository(session)

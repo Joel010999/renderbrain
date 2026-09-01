@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from runtime.infrastructure.database.probes import check_postgres
 from runtime.infrastructure.redis.probes import check_redis
 
-from runtime.api.routes import missions, intelligence, dashboard
+from runtime.api.routes import missions, intelligence, dashboard, content_briefs
 from runtime.api.auth import get_current_admin
 from runtime.shared.config import validate_api_settings
 
@@ -20,6 +20,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(dashboard.router)
 app.include_router(missions.router, prefix="/api/v1", dependencies=[Depends(get_current_admin)])
 app.include_router(intelligence.router, prefix="/api/v1", dependencies=[Depends(get_current_admin)])
+app.include_router(content_briefs.router, prefix="/api/v1", dependencies=[Depends(get_current_admin)])
 
 
 @app.get("/health")

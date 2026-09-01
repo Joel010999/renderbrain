@@ -1,0 +1,133 @@
+"""
+runtime/orchestration/content_strategy_flow.py
+
+Orquestador del flujo de estrategia de contenido — Agent 3.
+
+Responsabilidades:
+    - Llamar al ContentStrategist para generar el ContentBrief.
+    - Persistir el brief con aislamiento transaccional total respecto al Agent 2.
+    - Garantizar que ningún fallo del Agent 3 afecte la Opportunity del Agent 2.
+
+Aislamiento transaccional:
+    run_content_strategy_flow() abre su PROPIA async_session.
+    Nunca recibe la sesión del Agent 2 como parámetro.
+    El commit del Agent 2 ya ocurrió ANTES de que esta función sea llamada.
+
+Manejo de errores:
+    - InvalidContentBriefOutputError: error semántico → loguear + retornar None.
+    - LLMProviderError / RuntimeError: error de infra → loguear + retornar None.
+    - SQLAlchemy errors: error de persistencia → loguear + retornar None.
+
+    NINGÚN error sube al SignalWorker de forma no controlada desde esta función.
+    La Opportunity del Agent 2 queda siempre intacta.
+"""
+
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from runtime.contracts.content_brief import ContentBrief
+from runtime.contracts.knowledge import Opportunity
+from runtime.engines.content.strategist import ContentStrategist, InvalidContentBriefOutputError
+from runtime.infrastructure.database.repositories.content_brief import ContentBriefRepository
+from runtime.infrastructure.llm.interfaces import LLMProvider
+from runtime.shared.logger import get_logger
+
+logger: logging.Logger = get_logger(__name__)
+
+
+async def run_content_strategy_flow(
+    opportunity: Opportunity,
+    mission_context: str,
+    llm_provider: LLMProvider,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> ContentBrief | None:
+    """
+    Genera y persiste un ContentBrief para la Opportunity dada.
+
+    Se ejecuta en su propia transacción, completamente aislada del Agent 2.
+    Todos los errores son capturados internamente; nunca se propagan al caller.
+
+    Args:
+        opportunity:     Opportunity ya committeada por el Agent 2.
+        mission_context: Contexto de misión (nombre, scope, target).
+        llm_provider:    LLMProvider inyectado (mismo que usa el worker).
+        session_factory: Fábrica de sesiones async (misma que usa el worker).
+
+    Returns:
+        ContentBrief si la generación y persistencia fueron exitosas.
+        None si ocurrió cualquier error (loguado internamente).
+    """
+    logger.info(
+        "Agent 3: content strategy flow started",
+        extra={
+            "opportunity_id": str(opportunity.id),
+            "opportunity_title": opportunity.title,
+            "mission_id": str(opportunity.mission_id),
+        },
+    )
+
+    # 1. Generar ContentBrief via LLM
+    try:
+        strategist = ContentStrategist(llm_provider=llm_provider)
+        brief = await strategist.generate(
+            opportunity=opportunity,
+            mission_context=mission_context,
+        )
+    except InvalidContentBriefOutputError as e:
+        logger.warning(
+            "Agent 3: invalid content brief output — discarding brief, opportunity intact",
+            extra={
+                "opportunity_id": str(opportunity.id),
+                "error": str(e),
+            },
+        )
+        return None
+    except Exception as e:
+        logger.error(
+            "Agent 3: provider/infra error during content brief generation",
+            extra={
+                "opportunity_id": str(opportunity.id),
+                "error": str(e),
+            },
+            exc_info=True,
+        )
+        return None
+
+    # 2. Persistir el brief en transacción propia (aislada del Agent 2)
+    try:
+        async with session_factory() as session:
+            repo = ContentBriefRepository(session)
+            inserted = await repo.save_if_not_exists(brief)
+            await session.commit()
+
+        if inserted:
+            logger.info(
+                "Agent 3: content brief persisted",
+                extra={
+                    "brief_id": str(brief.id),
+                    "opportunity_id": str(opportunity.id),
+                    "content_format": brief.content_format.value,
+                    "objective": brief.objective.value,
+                },
+            )
+        else:
+            logger.info(
+                "Agent 3: content brief already exists for this opportunity — skipping",
+                extra={
+                    "opportunity_id": str(opportunity.id),
+                },
+            )
+    except Exception as e:
+        logger.error(
+            "Agent 3: error persisting content brief",
+            extra={
+                "opportunity_id": str(opportunity.id),
+                "brief_id": str(brief.id),
+                "error": str(e),
+            },
+            exc_info=True,
+        )
+        return None
+
+    return brief

@@ -14,10 +14,12 @@ from runtime.infrastructure.database.models.knowledge import (
     KnowledgeTransactionModel,
 )
 from runtime.infrastructure.database.models.mission import MissionModel, ProcessedSignalModel
+from runtime.infrastructure.database.models.content_brief import ContentBriefModel
 
 __all__ = [
     "Base",
     "CanonicalSignalModel",
+    "ContentBriefModel",
     "EvidenceModel",
     "InsightModel",
     "KnowledgeTransactionModel",

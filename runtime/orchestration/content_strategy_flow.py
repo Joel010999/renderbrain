@@ -28,7 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from runtime.contracts.content_brief import ContentBrief
 from runtime.contracts.knowledge import Opportunity
-from runtime.engines.content.strategist import ContentStrategist, InvalidContentBriefOutputError
+from runtime.engines.content.strategist import (
+    ContentStrategist, 
+    InvalidContentBriefOutputError, 
+    MisalignedBrandBriefError
+)
 from runtime.infrastructure.database.models.mission import MissionModel
 from runtime.infrastructure.database.repositories.content_brief import ContentBriefRepository
 from runtime.infrastructure.llm.interfaces import LLMProvider
@@ -86,9 +90,9 @@ async def run_content_strategy_flow(
             observation_scope=observation_scope,
             brand_context=BRAND_CONTEXT,
         )
-    except InvalidContentBriefOutputError as e:
+    except (InvalidContentBriefOutputError, MisalignedBrandBriefError) as e:
         logger.warning(
-            "Agent 3: invalid content brief output — discarding brief, opportunity intact",
+            "Agent 3: semantic/alignment error — discarding brief, opportunity intact",
             extra={
                 "opportunity_id": str(opportunity.id),
                 "error": str(e),

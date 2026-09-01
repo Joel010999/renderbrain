@@ -63,6 +63,15 @@ class InvalidContentBriefOutputError(ValueError):
     """
 
 
+class MisalignedBrandBriefError(ValueError):
+    """
+    Error semántico post-generación.
+    Se lanza cuando el contenido generado (hook, core_message, sections, cta) 
+    sigue promocionando la fuente observada en lugar de abstraer un transferable 
+    insight hacia los servicios de la marca.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Modelo privado para validar la respuesta JSON del LLM
 # ---------------------------------------------------------------------------
@@ -151,9 +160,11 @@ class ContentStrategist:
             )
 
         brief = self._parse_and_validate(raw_response, opportunity)
+        
+        await self._validate_alignment(brief, opportunity, brand_context)
 
         logger.info(
-            "Content brief generated",
+            "Content brief generated and validated",
             extra={
                 "opportunity_id": str(opportunity.id),
                 "brief_id": str(brief.id),
@@ -163,6 +174,71 @@ class ContentStrategist:
         )
 
         return brief
+
+    async def _validate_alignment(
+        self,
+        brief: ContentBrief,
+        opportunity: Opportunity,
+        brand_context: dict[str, str | list[str]] | None,
+    ) -> None:
+        """
+        Validación post-generación para asegurar que el contenido final no 
+        promocione la fuente original.
+        """
+        prompt = f"""You are a strict QA Reviewer for RenderBrain.
+Evaluate the following Content Brief generated from an observed opportunity.
+
+OBSERVED OPPORTUNITY (The Source):
+Title: {opportunity.title}
+Description: {opportunity.description}
+
+BRAND CONTEXT:
+Brand Name: {brand_context.get('brand_name', 'The Brand') if brand_context else 'The Brand'}
+Selected Service Alignment: {brief.brand_service_alignment.value}
+
+GENERATED CONTENT TO REVIEW:
+Hook: {brief.hook}
+Core Message: {brief.core_message}
+Sections:
+"""
+        for s in brief.sections:
+            prompt += f"- {s.content}\n"
+        prompt += f"""
+CTA: {brief.cta}
+Visual Direction: {brief.visual_direction}
+
+CRITICAL RULES FOR APPROVAL:
+1. The content MUST NOT promote or be primarily about the Observed Opportunity's specific event, product, or community.
+2. The content MUST be about a transferable business lesson mapped to the Selected Service Alignment ({brief.brand_service_alignment.value}).
+3. The Brand must be the main focus of the solution, not just mentioned as a side note.
+4. If the selected alignment is a direct fit for the opportunity (like 'stock_sales_collections' for an opportunity about 'control de stock'), that's fine, but if it is completely different (like 'crm' for 'coworking'), the content must clearly not promote coworking.
+
+Answer ONLY with a valid JSON containing:
+{{
+    "is_aligned": boolean,
+    "reason": "short explanation"
+}}
+"""
+        try:
+            val_response = await asyncio.wait_for(self._llm.complete(prompt), timeout=30.0)
+            clean = val_response.strip()
+            if clean.startswith("```json"):
+                clean = clean[7:]
+            if clean.startswith("```"):
+                clean = clean[3:]
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+            val_data = json.loads(clean)
+            
+            if not val_data.get("is_aligned", True):
+                raise MisalignedBrandBriefError(
+                    f"El contenido sigue promocionando la fuente o no se alinea con RenderByte: {val_data.get('reason')}"
+                )
+        except json.JSONDecodeError:
+            pass  # Tolerante si falla el parseo QA
+        except asyncio.TimeoutError as e:
+            raise RuntimeError("Timeout esperando validación QA del LLM (Content Strategist).") from e
 
     def _parse_and_validate(
         self,
@@ -324,6 +400,10 @@ Reglas Críticas:
 - Agent 3 NO debe convertir directamente Opportunity -> Content. Debe hacer: SOURCE OPPORTUNITY -> EXTRACT TRANSFERABLE INSIGHT -> MAP TO RENDERBYTE SERVICE/PAIN -> GENERATE CONTENT.
 - If the observed opportunity is unrelated to RenderByte directly, extract a transferable business lesson and connect it to a real RenderByte pain/service.
 - Do NOT promote the observed opportunity itself.
+- The observed opportunity MUST NOT remain the main topic of the final content if it is not a RenderByte service.
+- The final content must be ABOUT the transferable business lesson and the selected RenderByte service.
+- Do not merely mention RenderByte inside content that still promotes the observed source.
+- The selected brand_service_alignment must be reflected in the hook, core message, body and CTA.
 - NO inventar información de marca que no esté en tu contexto.
 - NO buscar en internet ni referenciar datos externos.
 - El hook debe ser publicable tal cual (no una descripción de un hook).

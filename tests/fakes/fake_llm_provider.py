@@ -20,4 +20,6 @@ class FakeLLMProvider(LLMProvider):
         self.call_count += 1
         if not prompt or not prompt.strip():
             raise LLMInputError("El prompt no puede estar vacío.")
+        if "QA Reviewer" in prompt:
+            return '{"is_aligned": true, "reason": "ok"}'
         return self.predefined_response

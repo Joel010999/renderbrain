@@ -68,6 +68,7 @@ class ContentBriefRepository:
                 objective=brief.objective.value,
                 target_audience=brief.target_audience,
                 angle=brief.angle.value,
+                brand_service_alignment=brief.brand_service_alignment.value,
                 core_message=brief.core_message,
                 hook=brief.hook,
                 sections=sections_json,
@@ -129,7 +130,7 @@ class ContentBriefRepository:
     @staticmethod
     def _to_contract(model: ContentBriefModel) -> ContentBrief:
         """Convierte un ContentBriefModel ORM a un ContentBrief de dominio."""
-        from runtime.contracts.content_brief import ContentFormat, ContentObjective, ContentAngle
+        from runtime.contracts.content_brief import ContentFormat, ContentObjective, ContentAngle, BrandServiceAlignment
 
         sections_raw = model.sections or []
         sections = [
@@ -149,6 +150,7 @@ class ContentBriefRepository:
             objective=ContentObjective(model.objective),
             target_audience=model.target_audience,
             angle=ContentAngle(model.angle),
+            brand_service_alignment=BrandServiceAlignment(model.brand_service_alignment) if model.brand_service_alignment else BrandServiceAlignment.crm,
             core_message=model.core_message,
             hook=model.hook,
             sections=sections,

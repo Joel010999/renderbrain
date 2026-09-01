@@ -27,6 +27,7 @@ import asyncio
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from runtime.contracts.content_brief import (
+    BrandServiceAlignment,
     ContentAngle,
     ContentBrief,
     ContentBriefSection,
@@ -76,6 +77,7 @@ class _LLMContentBriefRaw(BaseModel):
     objective: ContentObjective
     target_audience: str
     angle: ContentAngle
+    brand_service_alignment: BrandServiceAlignment
     core_message: str
     hook: str
     sections: list[dict]  # Validados individualmente abajo
@@ -218,6 +220,7 @@ class ContentStrategist:
                 objective=raw.objective,
                 target_audience=raw.target_audience,
                 angle=raw.angle,
+                brand_service_alignment=raw.brand_service_alignment,
                 core_message=raw.core_message,
                 hook=raw.hook,
                 sections=sections,
@@ -269,6 +272,7 @@ class ContentStrategist:
         formats = ", ".join(f.value for f in ContentFormat)
         objectives = ", ".join(o.value for o in ContentObjective)
         angles = ", ".join(a.value for a in ContentAngle)
+        alignments = ", ".join(a.value for a in BrandServiceAlignment)
 
         brand_info = ""
         if brand_context:
@@ -301,21 +305,25 @@ Instrucciones:
 2. Define el OBJETIVO comunicacional: {objectives}
 3. Identifica la AUDIENCIA objetivo (descripción corta, 1-2 oraciones).
 4. Elige el ÁNGULO narrativo: {angles}
-5. Redacta el MENSAJE CENTRAL (core_message): la idea fundamental en 1 oración.
-6. Escribe el HOOK: primera línea de apertura, corta, impactante, publicable directamente.
-7. Desarrolla el BODY/SCRIPT como secciones ordenadas (sections). Mínimo 1 sección, máximo 5.
+5. Mapea un TRANSFERABLE INSIGHT a un SERVICIO DE RenderByte (brand_service_alignment): {alignments}. (The final content MUST be relevant to at least one real RenderByte service).
+6. Redacta el MENSAJE CENTRAL (core_message): la idea fundamental en 1 oración.
+7. Escribe el HOOK: primera línea de apertura, corta, impactante, publicable directamente.
+8. Desarrolla el BODY/SCRIPT como secciones ordenadas (sections). Mínimo 1 sección, máximo 5.
    - Para reel: guión por bloques narrativos.
    - Para carousel: un slide por sección.
    - Para static_post: una sola sección con el cuerpo completo.
-8. Define el CTA coherente con el objetivo.
-9. Da una DIRECCIÓN VISUAL conceptual (instrucción para el diseñador/productor, NO colores ni diseño final).
-10. Redacta el SOURCE_REASONING: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
+9. Define el CTA coherente con el objetivo.
+10. Da una DIRECCIÓN VISUAL conceptual (instrucción para el diseñador/productor, NO colores ni diseño final).
+11. Redacta el SOURCE_REASONING: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
 
 Reglas Críticas:
 - You are creating content FOR {brand_context.get('brand_name', 'your brand') if brand_context else 'the brand'}.
 - The observed account/mission is a SOURCE of intelligence, NOT the brand.
 - NEVER claim products, services, events, programs, or offers from the observed source as belonging to your brand.
 - Transform the insight/opportunity into content relevant to YOUR brand's services and audience.
+- Agent 3 NO debe convertir directamente Opportunity -> Content. Debe hacer: SOURCE OPPORTUNITY -> EXTRACT TRANSFERABLE INSIGHT -> MAP TO RENDERBYTE SERVICE/PAIN -> GENERATE CONTENT.
+- If the observed opportunity is unrelated to RenderByte directly, extract a transferable business lesson and connect it to a real RenderByte pain/service.
+- Do NOT promote the observed opportunity itself.
 - NO inventar información de marca que no esté en tu contexto.
 - NO buscar en internet ni referenciar datos externos.
 - El hook debe ser publicable tal cual (no una descripción de un hook).
@@ -328,6 +336,7 @@ Responde ÚNICAMENTE con un JSON válido con esta estructura exacta (sin markdow
     "objective": "<uno de: {objectives}>",
     "target_audience": "<descripción corta de la audiencia>",
     "angle": "<uno de: {angles}>",
+    "brand_service_alignment": "<uno de: {alignments}>",
     "core_message": "<mensaje central en 1 oración>",
     "hook": "<primera línea de apertura impactante>",
     "sections": [

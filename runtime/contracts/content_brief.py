@@ -56,6 +56,18 @@ class ContentAngle(str, Enum):
     transformation = "transformation"
 
 
+class BrandServiceAlignment(str, Enum):
+    """Alineación con un servicio real de RenderByte."""
+
+    crm = "crm"
+    management_system = "management_system"
+    stock_sales_collections = "stock_sales_collections"
+    automation = "automation"
+    ai = "ai"
+    website = "website"
+    ecommerce = "ecommerce"
+
+
 # ---------------------------------------------------------------------------
 # ContentBriefSection — representa una sección/slide del body/script
 # ---------------------------------------------------------------------------
@@ -111,6 +123,7 @@ class ContentBrief(BaseModel):
     objective: ContentObjective
     target_audience: str = Field(min_length=1)
     angle: ContentAngle
+    brand_service_alignment: BrandServiceAlignment
 
     core_message: str = Field(min_length=1)
     hook: str = Field(min_length=1, description="Línea de apertura corta y publicable.")

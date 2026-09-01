@@ -33,6 +33,7 @@ def build_valid_json_response() -> str:
         "objective": "education",
         "target_audience": "Emprendedores",
         "angle": "pain",
+        "brand_service_alignment": "crm",
         "core_message": "El control de stock manual mata tu negocio.",
         "hook": "¿Sigues usando Excel para tu inventario? Estás perdiendo dinero.",
         "sections": [

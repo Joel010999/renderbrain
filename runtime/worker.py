@@ -16,6 +16,7 @@ from runtime.infrastructure.redis.client import get_redis_client
 from runtime.shared.config import settings
 from runtime.shared.logger import get_logger
 from runtime.workers.signal_worker import SignalWorker
+from runtime.workers.content_retry import content_strategy_retry_loop
 
 logger: logging.Logger = get_logger(__name__)
 
@@ -85,6 +86,17 @@ async def main() -> None:
 
     logger.info("Worker Runtime started and listening for events...")
     
+    # Arrancar Agent 3 Retry/Backfill loop en background (cada 10 min)
+    retry_task = asyncio.create_task(
+        content_strategy_retry_loop(
+            session_factory=async_session,
+            llm_provider=llm,
+            mission_context=mission_context,
+            stop_event=stop_event,
+            interval_seconds=600,
+        )
+    )
+    
     try:
         # Loop productivo, espera señal de cierre
         while not stop_event.is_set():
@@ -102,6 +114,8 @@ async def main() -> None:
     except Exception as e:
         logger.error("Fatal error in Worker Runtime", exc_info=True, extra={"error": str(e)})
     finally:
+        stop_event.set()
+        await retry_task
         await redis.aclose()
 
 

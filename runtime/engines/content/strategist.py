@@ -106,13 +106,17 @@ class ContentStrategist:
         self,
         opportunity: Opportunity,
         mission_context: str,
+        observation_scope: str = "reference",
+        brand_context: dict[str, str | list[str]] | None = None,
     ) -> ContentBrief:
         """
         Genera un ContentBrief validado a partir de una Opportunity.
 
         Args:
-            opportunity:     Opportunity priorizada del Agent 2.
-            mission_context: Contexto de misión inyectado (nombre, scope, target).
+            opportunity:       Opportunity priorizada del Agent 2.
+            mission_context:   Contexto de misión inyectado (nombre, scope, target).
+            observation_scope: Propósito por el cual la fuente fue observada.
+            brand_context:     Contexto de la marca para la cual se genera el contenido.
 
         Returns:
             ContentBrief validado y listo para persistencia.
@@ -121,7 +125,7 @@ class ContentStrategist:
             InvalidContentBriefOutputError: JSON roto, schema inválido, campos faltantes.
             LLMProviderError / RuntimeError: Fallos de infraestructura del provider.
         """
-        prompt = self._build_prompt(opportunity, mission_context)
+        prompt = self._build_prompt(opportunity, mission_context, observation_scope, brand_context)
 
         logger.info(
             "Content strategy generation started",
@@ -249,6 +253,8 @@ class ContentStrategist:
         self,
         opportunity: Opportunity,
         mission_context: str,
+        observation_scope: str,
+        brand_context: dict[str, str | list[str]] | None,
     ) -> str:
         """
         Construye el prompt para la generación del ContentBrief.
@@ -259,13 +265,28 @@ class ContentStrategist:
         objectives = ", ".join(o.value for o in ContentObjective)
         angles = ", ".join(a.value for a in ContentAngle)
 
+        brand_info = ""
+        if brand_context:
+            services = ", ".join(brand_context.get("core_services", []))
+            brand_info = f"""
+Contexto de TU Marca (BRAND):
+Eres el Content Strategist para {brand_context.get('brand_name', 'la marca')}.
+Descripción: {brand_context.get('brand_description', '')}
+Servicios: {services}
+Audiencia: {brand_context.get('target_audience', '')}
+Objetivo de contenido: {brand_context.get('content_goal', '')}
+"""
+
         return f"""Eres RenderBrain Content Strategist — Agent 3.
 Tu tarea es generar una propuesta de contenido concreta y accionable a partir de una Opportunity estratégica detectada.
 
-Contexto de la Misión:
-{mission_context}
+{brand_info}
 
-Opportunity a trabajar:
+Contexto de la Misión (La FUENTE que observaste para aprender):
+{mission_context}
+Propósito de la observación (observation_scope): {observation_scope}
+
+Opportunity a trabajar (Aprendizaje extraído de la fuente):
 - Título: {opportunity.title}
 - Descripción: {opportunity.description}
 - Prioridad: {opportunity.priority}
@@ -286,7 +307,11 @@ Instrucciones:
 10. Redacta el SOURCE_REASONING: por qué esta pieza es la respuesta correcta a esta Opportunity. Sin chain-of-thought.
 
 Reglas Críticas:
-- NO inventar información de marca que no esté en el contexto de la misión.
+- You are creating content FOR {brand_context.get('brand_name', 'your brand') if brand_context else 'the brand'}.
+- The observed account/mission is a SOURCE of intelligence, NOT the brand.
+- NEVER claim products, services, events, programs, or offers from the observed source as belonging to your brand.
+- Transform the insight/opportunity into content relevant to YOUR brand's services and audience.
+- NO inventar información de marca que no esté en tu contexto.
 - NO buscar en internet ni referenciar datos externos.
 - El hook debe ser publicable tal cual (no una descripción de un hook).
 - sections[].content debe ser el texto real del guión/slide, no una descripción.

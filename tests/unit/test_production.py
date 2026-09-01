@@ -122,11 +122,12 @@ async def test_worker_continues_on_message_error():
         mock_cg = mock_cg_class.return_value
         mock_cg.ensure_group = AsyncMock()
         
+        from unittest.mock import Mock
         # Simular que hay 2 mensajes en pending
         # El primero fallará, el segundo será exitoso
         mock_cg.read_pending = AsyncMock(return_value=[
-            ("msg1", "envelope1"),
-            ("msg2", "envelope2"),
+            ("msg1", Mock(event_id="e1", event_type="evt")),
+            ("msg2", Mock(event_id="e2", event_type="evt")),
         ])
         mock_cg.read_new = AsyncMock(return_value=[])
 

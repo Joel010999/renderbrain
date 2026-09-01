@@ -81,6 +81,12 @@ async def test_flow_semantic_error_caught(mock_repo_class, opportunity):
     # LLM returns broken JSON -> InvalidContentBriefOutputError
     llm = FakeLLMProvider("bad json")
     mock_session_factory = MagicMock()
+    mock_session = AsyncMock()
+    
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_session
+    mock_cm.__aexit__.return_value = None
+    mock_session_factory.return_value = mock_cm
 
     brief = await run_content_strategy_flow(
         opportunity=opportunity,
@@ -91,7 +97,8 @@ async def test_flow_semantic_error_caught(mock_repo_class, opportunity):
 
     # Returns None, doesn't raise
     assert brief is None
-    mock_session_factory.assert_not_called()
+    # Ensure commit was never called since it failed semantically
+    mock_session.commit.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -29,9 +29,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from runtime.contracts.content_brief import ContentBrief
 from runtime.contracts.knowledge import Opportunity
 from runtime.engines.content.strategist import ContentStrategist, InvalidContentBriefOutputError
+from runtime.infrastructure.database.models.mission import MissionModel
 from runtime.infrastructure.database.repositories.content_brief import ContentBriefRepository
 from runtime.infrastructure.llm.interfaces import LLMProvider
 from runtime.shared.logger import get_logger
+from runtime.contracts.brand import BRAND_CONTEXT
 
 logger: logging.Logger = get_logger(__name__)
 
@@ -67,12 +69,22 @@ async def run_content_strategy_flow(
         },
     )
 
-    # 1. Generar ContentBrief via LLM
+    # 1. Fetch Mission scope and generate ContentBrief via LLM
     try:
+        async with session_factory() as session:
+            mission = await session.get(MissionModel, opportunity.mission_id)
+            if not mission:
+                logger.error("Agent 3: Mission not found", extra={"mission_id": str(opportunity.mission_id)})
+                return None
+            
+            observation_scope = mission.observation_scope or "reference"
+            
         strategist = ContentStrategist(llm_provider=llm_provider)
         brief = await strategist.generate(
             opportunity=opportunity,
             mission_context=mission_context,
+            observation_scope=observation_scope,
+            brand_context=BRAND_CONTEXT,
         )
     except InvalidContentBriefOutputError as e:
         logger.warning(

@@ -37,12 +37,21 @@ async def content_strategy_retry_loop(
     logger.info("Content Strategy Retry loop started", extra={"interval_seconds": interval_seconds})
 
     while not stop_event.is_set():
+        logger.info("Content Strategy Retry iteration started")
+        
         try:
             await _process_missing_briefs(session_factory, llm_provider, mission_context)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error("Error in Content Strategy Retry loop", extra={"error": str(e)}, exc_info=True)
+            logger.error("Content Strategy Retry iteration failed", extra={"error_type": type(e).__name__, "error": str(e)}, exc_info=True)
 
-        # Esperar el intervalo, interrumpible si el worker se apaga
+        logger.info("Content Strategy Retry iteration completed")
+
+        if stop_event.is_set():
+            break
+
+        logger.info("Content Strategy Retry sleeping", extra={"interval_seconds": interval_seconds})
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
         except asyncio.TimeoutError:
@@ -70,6 +79,7 @@ async def _process_missing_briefs(
         opportunities = result.scalars().all()
 
     if not opportunities:
+        logger.info("Content Strategy Retry: no opportunities without briefs")
         return
 
     logger.info(
@@ -78,22 +88,27 @@ async def _process_missing_briefs(
     )
 
     for opp_model in opportunities:
-        # Convertir OpportunityModel a contrato de dominio
-        from runtime.contracts.knowledge import Opportunity
-        
-        opp = Opportunity(
-            id=opp_model.id,
-            mission_id=opp_model.mission_id,
-            title=opp_model.title,
-            description=opp_model.description,
-            priority=opp_model.priority,
-            created_at=opp_model.created_at,
-        )
+        try:
+            # Convertir OpportunityModel a contrato de dominio
+            from runtime.contracts.knowledge import Opportunity
+            
+            opp = Opportunity(
+                id=opp_model.id,
+                mission_id=opp_model.mission_id,
+                title=opp_model.title,
+                description=opp_model.description,
+                priority=opp_model.priority,
+                created_at=opp_model.created_at,
+            )
 
-        # run_content_strategy_flow gestiona su propia transacción aislada
-        await run_content_strategy_flow(
-            opportunity=opp,
-            mission_context=mission_context,
-            llm_provider=llm_provider,
-            session_factory=session_factory,
-        )
+            # run_content_strategy_flow gestiona su propia transacción aislada
+            await run_content_strategy_flow(
+                opportunity=opp,
+                mission_context=mission_context,
+                llm_provider=llm_provider,
+                session_factory=session_factory,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Content Strategy Retry: error processing opportunity", extra={"opportunity_id": str(opp_model.id), "error": str(e)}, exc_info=True)

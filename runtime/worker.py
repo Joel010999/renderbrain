@@ -115,7 +115,11 @@ async def main() -> None:
         logger.error("Fatal error in Worker Runtime", exc_info=True, extra={"error": str(e)})
     finally:
         stop_event.set()
-        await retry_task
+        retry_task.cancel()
+        try:
+            await retry_task
+        except asyncio.CancelledError:
+            pass
         await redis.aclose()
 
 

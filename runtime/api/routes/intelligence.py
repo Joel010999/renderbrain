@@ -127,4 +127,8 @@ async def retry_opportunity_content_generation(
         raise HTTPException(status_code=404, detail="Opportunity not found")
         
     await knowledge_repo.reset_content_generation_attempts(opportunity_id)
-    return {"status": "success", "message": "Content generation attempts reset to 0"}
+    return {
+        "opportunity_id": str(opportunity_id),
+        "content_generation_attempts": 0,
+        "status": "ready_for_retry"
+    }

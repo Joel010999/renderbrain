@@ -257,6 +257,14 @@ class KnowledgeCoreRepository:
         await self._session.flush()
         return opportunity
 
+    async def get_opportunity_by_id(self, opportunity_id: UUID) -> Optional[OpportunityModel]:
+        """
+        Recupera un OpportunityModel por su ID.
+        """
+        stmt = select(OpportunityModel).where(OpportunityModel.id == opportunity_id)
+        result = await self._session.execute(stmt)
+        return result.scalars().first()
+
     async def list_recent_opportunities(self, mission_id: UUID, limit: int = 10) -> list[Opportunity]:
         """
         Recupera las opportunities más recientes de una misión.

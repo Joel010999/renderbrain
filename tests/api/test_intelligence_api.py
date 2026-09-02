@@ -165,3 +165,49 @@ async def test_intelligence_invalid_limits(api_client):
     # limit > 100 violates constraint
     response = await api_client.get(f"/api/v1/missions/{mission_id}/intelligence?insight_limit=200")
     assert response.status_code == 422
+
+
+@pytest.mark.integration
+async def test_retry_content_generation_endpoint(api_client):
+    mission_id = uuid4()
+    opportunity_id = uuid4()
+
+    async with async_session() as session:
+        await _create_mission(session, mission_id)
+        
+        # Insert opportunity with attempts = 3
+        om = OpportunityModel(
+            id=opportunity_id,
+            mission_id=mission_id,
+            content="O1",
+            created_at=datetime.now(timezone.utc),
+            content_generation_attempts=3
+        )
+        session.add(om)
+        await session.commit()
+
+    # Hit the endpoint
+    res = await api_client.post(f"/api/v1/missions/{mission_id}/opportunities/{opportunity_id}/retry-content-generation")
+    
+    assert res.status_code == 200
+    data = res.json()
+    assert data["opportunity_id"] == str(opportunity_id)
+    assert data["content_generation_attempts"] == 0
+    assert data["status"] == "ready_for_retry"
+    
+    # Verify DB update
+    async with async_session() as session:
+        repo = KnowledgeCoreRepository(session)
+        opp = await repo.get_opportunity_by_id(opportunity_id)
+        assert opp.content_generation_attempts == 0
+
+@pytest.mark.integration
+async def test_retry_content_generation_not_found(api_client):
+    mission_id = uuid4()
+    opportunity_id = uuid4()
+
+    async with async_session() as session:
+        await _create_mission(session, mission_id)
+
+    res = await api_client.post(f"/api/v1/missions/{mission_id}/opportunities/{opportunity_id}/retry-content-generation")
+    assert res.status_code == 404

@@ -321,6 +321,19 @@ class KnowledgeCoreRepository:
             for m in models
         ]
 
+    async def reset_content_generation_attempts(self, opportunity_id: UUID) -> None:
+        """
+        Resetea content_generation_attempts a 0 para la Opportunity indicada.
+        Solo hace flush; el commit queda delegado al contexto de sesión (get_session).
+        """
+        stmt = (
+            update(OpportunityModel)
+            .where(OpportunityModel.id == opportunity_id)
+            .values(content_generation_attempts=0)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def list_opportunities_with_support(self, mission_id: UUID, limit: int = 100) -> list[tuple[Opportunity, list[UUID]]]:
         """
         Recupera opportunities con su lista de IDs de patterns de soporte.

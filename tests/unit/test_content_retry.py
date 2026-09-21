@@ -144,3 +144,110 @@ async def test_e_immediate_first_iteration(mock_session_factory, mock_llm_provid
         )
         
         assert mock_process.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — query eligibility filter logic
+# Verifica que _process_missing_briefs incluya/excluya oportunidades según
+# el criterio: sin ContentBrief AND content_generation_attempts < 3
+# ---------------------------------------------------------------------------
+
+def _make_session_factory(opportunities: list):
+    """Construye un mock de session_factory que devuelve una lista de oportunidades."""
+    session = AsyncMock()
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = opportunities
+    session.execute.return_value = result_mock
+    session.__aenter__.return_value = session
+    session.__aexit__.return_value = None
+    factory = MagicMock(return_value=session)
+    return factory
+
+
+@pytest.mark.asyncio
+async def test_f_opportunity_with_zero_attempts_and_no_brief_is_eligible():
+    """
+    Oportunidad con content_generation_attempts=0 y sin ContentBrief
+    DEBE aparecer en el batch — es el caso del bug reportado.
+
+    Verifica que _process_missing_briefs llama a run_content_strategy_flow
+    exactamente una vez cuando hay una oportunidad elegible.
+    """
+    from uuid import UUID
+    from datetime import datetime, timezone
+
+    opp = MagicMock()
+    opp.id = UUID("d5f6a263-2e0b-48c8-b855-6ae7891d66de")
+    opp.mission_id = UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+    opp.title = "Creación de un Espacio de Co-Working para Emprendedores"
+    opp.description = "Descripción de la oportunidad."
+    opp.priority = "high"
+    opp.content_generation_attempts = 0
+    opp.created_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    # No existe ContentBrief → el outerjoin LEFT JOIN devuelve NULL para cb.id
+    # La session_factory devuelve esta oportunidad (el filtro SQL ya la incluyó)
+
+    factory = _make_session_factory([opp])
+
+    with patch(
+        "runtime.workers.content_retry.run_content_strategy_flow",
+        new_callable=AsyncMock,
+    ) as mock_flow:
+        await _process_missing_briefs(
+            session_factory=factory,
+            llm_provider=AsyncMock(),
+            mission_context="test",
+        )
+
+    # Debe haber procesado exactamente 1 oportunidad
+    assert mock_flow.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_g_opportunity_with_existing_brief_is_excluded():
+    """
+    Oportunidad que YA tiene un ContentBrief NO debe aparecer en el batch.
+
+    Verifica que cuando la session devuelve lista vacía (el LEFT JOIN filtró la
+    oportunidad porque cb.id IS NOT NULL), _process_missing_briefs no llama
+    a run_content_strategy_flow.
+    """
+    # La session devuelve [] porque el WHERE cb.id IS NULL ya excluyó la fila
+    factory = _make_session_factory([])
+
+    with patch(
+        "runtime.workers.content_retry.run_content_strategy_flow",
+        new_callable=AsyncMock,
+    ) as mock_flow:
+        await _process_missing_briefs(
+            session_factory=factory,
+            llm_provider=AsyncMock(),
+            mission_context="test",
+        )
+
+    # No debe haber procesado ninguna oportunidad
+    assert mock_flow.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_h_opportunity_with_three_attempts_is_excluded():
+    """
+    Oportunidad con content_generation_attempts=3 NO debe aparecer en el batch.
+
+    Verifica que cuando la session devuelve [] (el WHERE attempts < 3 ya la
+    excluyó), _process_missing_briefs no llama a run_content_strategy_flow.
+    """
+    # La session devuelve [] porque content_generation_attempts >= 3
+    factory = _make_session_factory([])
+
+    with patch(
+        "runtime.workers.content_retry.run_content_strategy_flow",
+        new_callable=AsyncMock,
+    ) as mock_flow:
+        await _process_missing_briefs(
+            session_factory=factory,
+            llm_provider=AsyncMock(),
+            mission_context="test",
+        )
+
+    assert mock_flow.call_count == 0
